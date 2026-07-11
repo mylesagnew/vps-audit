@@ -9,19 +9,25 @@ A comprehensive Bash script for auditing the security and performance of your VP
 
 ### Security Checks
 
-- SSH Configuration
+- SSH Configuration (read from the effective `sshd -T` config)
   - Root login status
   - Password authentication
   - Non-default port usage
-- Firewall Status (UFW)
-- Fail2ban Configuration
-- Failed Login Attempts
-- System Updates Status
+- Firewall Status (UFW / firewalld / nftables / iptables, policy-aware)
+- Intrusion Prevention (Fail2ban or CrowdSec, host or Docker container)
+- Failed Login Attempts (auth.log/secure with rotation, or journald)
+- System Updates Status (security vs. non-security)
 - Running Services Analysis
-- Open Ports Detection
+- Open Ports Detection (internet-facing vs. loopback)
 - Sudo Logging Configuration
 - Password Policy Enforcement
-- SUID Files Detection
+- SUID Files Detection (verified against the package database)
+
+### Output
+
+- Human-readable coloured console output + timestamped report file
+- Machine-readable JSON via `--json`
+- CI/CD-friendly exit codes (see [Usage](#usage))
 
 ### Performance Monitoring
 
@@ -46,9 +52,9 @@ A comprehensive Bash script for auditing the security and performance of your VP
 1. Download the script:
 
 ```bash
-wget https://raw.githubusercontent.com/vernu/vps-audit/main/vps-audit.sh
+wget https://raw.githubusercontent.com/mylesagnew/vps-audit/main/vps-audit.sh
 # or
-curl -O https://raw.githubusercontent.com/vernu/vps-audit/main/vps-audit.sh
+curl -O https://raw.githubusercontent.com/mylesagnew/vps-audit/main/vps-audit.sh
 ```
 
 2. Make the script executable:
@@ -72,7 +78,30 @@ The script will:
    - 🟢 [PASS] - Check passed successfully
    - 🟡 [WARN] - Potential issues detected
    - 🔴 [FAIL] - Critical issues found
-3. Generate a detailed report file: `vps-audit-report-[TIMESTAMP].txt`
+3. Generate a detailed report file: `vps-audit-report-[TIMESTAMP].txt` (created with `chmod 600`)
+
+### Options
+
+| Option | Description |
+|--------|-------------|
+| `--json` | Emit machine-readable JSON to stdout (suppresses the coloured UI). |
+| `--strict` | Exit non-zero on `WARN` as well as `FAIL`. |
+| `-o, --output FILE` | Write the text report to `FILE` instead of the default timestamped name. |
+| `-h, --help` | Show help and exit. |
+
+### Exit codes (for CI/CD gating)
+
+| Code | Meaning |
+|------|---------|
+| `0` | No `FAIL` findings (and, unless `--strict`, `WARN` is allowed). |
+| `1` | One or more `FAIL` findings (or any `WARN` under `--strict`). |
+| `2` | Usage error (unknown flag / missing argument). |
+
+Example pipeline step that fails the build on any FAIL or WARN:
+
+```bash
+sudo ./vps-audit.sh --json --strict > audit.json
+```
 
 ## Output Format
 
@@ -107,13 +136,17 @@ The script provides two types of output:
   - WARN: 10-50 attempts
   - FAIL: > 50 attempts
 - Running Services:
-  - PASS: < 20 services
-  - WARN: 20-40 services
-  - FAIL: > 40 services
-- Open Ports:
-  - PASS: < 10 ports
-  - WARN: 10-20 ports
-  - FAIL: > 20 ports
+  - PASS: < 35 services
+  - WARN: 35-60 services
+  - FAIL: > 60 services
+- Open Ports (counts **internet-facing** ports only; loopback is excluded):
+  - PASS: < 3 public ports
+  - WARN: 3-4 public ports
+  - FAIL: >= 5 public ports
+- System Updates:
+  - PASS: no pending updates
+  - WARN: non-security updates pending
+  - FAIL: one or more **security** updates pending
 
 ## Customization
 

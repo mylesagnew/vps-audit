@@ -367,14 +367,18 @@ else
     check_security "Failed Logins" "FAIL" "$FAILED_LOGINS failed login attempts ($LOGIN_SRC) - possible brute-force attack"
 fi
 
-# System updates (Debian/Ubuntu)
+# System updates (Debian/Ubuntu) - distinguish security from non-security
 if command -v apt-get >/dev/null 2>&1; then
-    UPDATES=$(apt-get -s upgrade 2>/dev/null | grep -E '^[0-9]+ upgraded' | cut -d" " -f1)
-    UPDATES=${UPDATES:-0}
-    if [ "$UPDATES" -eq 0 ]; then
-        check_security "System Updates" "PASS" "All apt packages are up to date (run 'apt update' first for accuracy)"
+    APT_SIM=$(apt-get -s upgrade 2>/dev/null)
+    ALL_UPDATES=$(echo "$APT_SIM" | grep -cE '^Inst ')
+    # Security updates come from a suite/archive containing "-security"
+    SEC_UPDATES=$(echo "$APT_SIM" | grep -E '^Inst ' | grep -ciE '\-security|Debian-Security')
+    if [ "$SEC_UPDATES" -gt 0 ]; then
+        check_security "System Updates" "FAIL" "$SEC_UPDATES security update(s) pending (of $ALL_UPDATES total) - apply immediately (run 'apt update' first for accuracy)"
+    elif [ "$ALL_UPDATES" -gt 0 ]; then
+        check_security "System Updates" "WARN" "$ALL_UPDATES non-security package update(s) available - schedule maintenance"
     else
-        check_security "System Updates" "FAIL" "$UPDATES package updates available - apply pending updates"
+        check_security "System Updates" "PASS" "All apt packages are up to date (run 'apt update' first for accuracy)"
     fi
 else
     check_security "System Updates" "WARN" "apt not present - check updates via your distro's package manager"
@@ -383,10 +387,10 @@ fi
 # Running services
 if command -v systemctl >/dev/null 2>&1; then
     SERVICES=$(systemctl list-units --type=service --state=running 2>/dev/null | grep -c "loaded active running")
-    if [ "$SERVICES" -lt 20 ]; then
-        check_security "Running Services" "PASS" "Running minimal services ($SERVICES)"
-    elif [ "$SERVICES" -lt 40 ]; then
-        check_security "Running Services" "WARN" "$SERVICES services running - consider reducing attack surface"
+    if [ "$SERVICES" -lt 35 ]; then
+        check_security "Running Services" "PASS" "$SERVICES services running - reasonable for a typical server"
+    elif [ "$SERVICES" -lt 60 ]; then
+        check_security "Running Services" "WARN" "$SERVICES services running - review whether all are needed"
     else
         check_security "Running Services" "FAIL" "Too many services running ($SERVICES) - increases attack surface"
     fi
@@ -461,11 +465,31 @@ else
     check_security "Memory Usage" "FAIL" "Critical memory usage (${MEM_USAGE}% used - ${MEM_USED} of ${MEM_TOTAL}, ${MEM_AVAIL} available)"
 fi
 
-# CPU usage
+# CPU usage - sample /proc/stat over 1s (accurate, locale-independent).
+# top -bn1 reports the since-boot average on its first sample, not current load.
 CPU_CORES=$(nproc)
-CPU_USAGE=$(top -bn1 | grep "Cpu(s)" | awk '{print int($2)}')
-CPU_IDLE=$(top -bn1 | grep "Cpu(s)" | awk '{print int($8)}')
 CPU_LOAD=$(uptime | awk -F'load average:' '{print $2}' | awk -F',' '{print $1}' | tr -d ' ')
+if [ -r /proc/stat ]; then
+    read -r _ u1 n1 s1 i1 w1 x1 y1 z1 _ </proc/stat
+    sleep 1
+    read -r _ u2 n2 s2 i2 w2 x2 y2 z2 _ </proc/stat
+    IDLE1=$((i1 + w1))
+    IDLE2=$((i2 + w2))
+    TOT1=$((u1 + n1 + s1 + i1 + w1 + x1 + y1 + z1))
+    TOT2=$((u2 + n2 + s2 + i2 + w2 + x2 + y2 + z2))
+    DTOT=$((TOT2 - TOT1))
+    DIDLE=$((IDLE2 - IDLE1))
+    if [ "$DTOT" -gt 0 ]; then
+        CPU_USAGE=$((100 * (DTOT - DIDLE) / DTOT))
+        CPU_IDLE=$((100 * DIDLE / DTOT))
+    else
+        CPU_USAGE=0
+        CPU_IDLE=100
+    fi
+else
+    CPU_USAGE=$(top -bn1 | awk '/Cpu\(s\)/{print int($2); exit}')
+    CPU_IDLE=$((100 - CPU_USAGE))
+fi
 if [ "$CPU_USAGE" -lt 50 ]; then
     check_security "CPU Usage" "PASS" "Healthy CPU usage (${CPU_USAGE}% - Idle: ${CPU_IDLE}%, Load: ${CPU_LOAD}, Cores: ${CPU_CORES})"
 elif [ "$CPU_USAGE" -lt 80 ]; then
