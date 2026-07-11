@@ -1,0 +1,65 @@
+name: Lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run ShellCheck
+        uses: ludeeus/action-shellcheck@master
+        with:
+          severity: style
+          scandir: .
+          additional_files: vps-audit.sh
+
+  shfmt:
+    name: shfmt (formatting)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shfmt
+        run: |
+          curl -fsSL -o /usr/local/bin/shfmt \
+            https://github.com/mvdan/sh/releases/download/v3.10.0/shfmt_v3.10.0_linux_amd64
+          chmod +x /usr/local/bin/shfmt
+          shfmt --version
+
+      - name: Check formatting (4-space indent, matches existing style)
+        run: shfmt -d -i 4 -ci -bn .
+
+  smoke:
+    name: Smoke test (parse + arg handling)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: bash -n syntax check
+        run: bash -n vps-audit.sh
+
+      - name: --help exits 0
+        run: bash vps-audit.sh --help
+
+      - name: unknown flag exits 2
+        run: |
+          set +e
+          bash vps-audit.sh --definitely-not-a-flag >/dev/null 2>&1
+          rc=$?
+          set -e
+          test "$rc" -eq 2 || { echo "expected exit 2, got $rc"; exit 1; }
+
+      - name: --json produces valid JSON
+        run: |
+          bash vps-audit.sh --json > out.json 2>/dev/null || true
+          python3 -c "import json,sys; d=json.load(open('out.json')); assert 'results' in d and 'summary' in d, d.keys(); print('valid JSON, keys:', list(d.keys()))"

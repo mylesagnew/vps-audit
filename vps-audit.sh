@@ -45,11 +45,25 @@ EOF
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --json)          JSON_OUTPUT=true ;;
-        --strict)        STRICT=true ;;
-        -o|--output)     shift; [ $# -gt 0 ] || { echo "error: --output needs an argument" >&2; exit 2; }; REPORT_FILE="$1" ;;
-        -h|--help)       usage; exit 0 ;;
-        *)               echo "error: unknown option '$1'" >&2; usage >&2; exit 2 ;;
+        --json) JSON_OUTPUT=true ;;
+        --strict) STRICT=true ;;
+        -o | --output)
+            shift
+            [ $# -gt 0 ] || {
+                echo "error: --output needs an argument" >&2
+                exit 2
+            }
+            REPORT_FILE="$1"
+            ;;
+        -h | --help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "error: unknown option '$1'" >&2
+            usage >&2
+            exit 2
+            ;;
     esac
     shift
 done
@@ -58,10 +72,21 @@ done
 # Colours (disabled when not a TTY or in JSON mode)
 # ---------------------------------------------------------------------------
 if [ -t 1 ] && ! $JSON_OUTPUT; then
-    GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[1;33m'
-    GRAY='\033[0;90m'; BLUE='\033[0;34m'; BOLD='\033[1m'; NC='\033[0m'
+    GREEN='\033[0;32m'
+    RED='\033[0;31m'
+    YELLOW='\033[1;33m'
+    GRAY='\033[0;90m'
+    BLUE='\033[0;34m'
+    BOLD='\033[1m'
+    NC='\033[0m'
 else
-    GREEN=''; RED=''; YELLOW=''; GRAY=''; BLUE=''; BOLD=''; NC=''
+    GREEN=''
+    RED=''
+    YELLOW=''
+    GRAY=''
+    BLUE=''
+    BOLD=''
+    NC=''
 fi
 
 # say(): human console output, suppressed in JSON mode
@@ -70,7 +95,9 @@ say() { $JSON_OUTPUT || echo -e "$1"; }
 # ---------------------------------------------------------------------------
 # Result tracking (#8)
 # ---------------------------------------------------------------------------
-PASS_COUNT=0; WARN_COUNT=0; FAIL_COUNT=0
+PASS_COUNT=0
+WARN_COUNT=0
+FAIL_COUNT=0
 JSON_ITEMS=()
 
 json_escape() {
@@ -88,26 +115,35 @@ print_header() {
     {
         echo -e "\n$header"
         echo "================================"
-    } >> "$REPORT_FILE"
+    } >>"$REPORT_FILE"
 }
 
 print_info() {
     local label="$1" value="$2"
     say "${BOLD}$label:${NC} $value"
-    echo "$label: $value" >> "$REPORT_FILE"
+    echo "$label: $value" >>"$REPORT_FILE"
 }
 
 check_security() {
     local test_name="$1" status="$2" message="$3"
     case $status in
-        PASS) PASS_COUNT=$((PASS_COUNT+1)); say "${GREEN}[PASS]${NC} $test_name ${GRAY}- $message${NC}" ;;
-        WARN) WARN_COUNT=$((WARN_COUNT+1)); say "${YELLOW}[WARN]${NC} $test_name ${GRAY}- $message${NC}" ;;
-        FAIL) FAIL_COUNT=$((FAIL_COUNT+1)); say "${RED}[FAIL]${NC} $test_name ${GRAY}- $message${NC}" ;;
+        PASS)
+            PASS_COUNT=$((PASS_COUNT + 1))
+            say "${GREEN}[PASS]${NC} $test_name ${GRAY}- $message${NC}"
+            ;;
+        WARN)
+            WARN_COUNT=$((WARN_COUNT + 1))
+            say "${YELLOW}[WARN]${NC} $test_name ${GRAY}- $message${NC}"
+            ;;
+        FAIL)
+            FAIL_COUNT=$((FAIL_COUNT + 1))
+            say "${RED}[FAIL]${NC} $test_name ${GRAY}- $message${NC}"
+            ;;
     esac
     {
         echo "[$status] $test_name - $message"
         echo ""
-    } >> "$REPORT_FILE"
+    } >>"$REPORT_FILE"
     JSON_ITEMS+=("{\"test\":\"$(json_escape "$test_name")\",\"status\":\"$status\",\"message\":\"$(json_escape "$message")\"}")
 }
 
@@ -123,7 +159,7 @@ say "${GRAY}Starting audit at $(date)${NC}\n"
     echo "https://github.com/mylesagnew/vps-audit"
     echo "Starting audit at $(date)"
     echo "================================"
-} > "$REPORT_FILE"
+} >"$REPORT_FILE"
 
 # ---------------------------------------------------------------------------
 # System Information
@@ -151,7 +187,7 @@ print_info "Total Memory" "$TOTAL_MEM"
 print_info "Total Disk Space" "$TOTAL_DISK"
 print_info "Public IP" "$PUBLIC_IP"
 print_info "Load Average" "$LOAD_AVERAGE"
-echo "" >> "$REPORT_FILE"
+echo "" >>"$REPORT_FILE"
 
 # ---------------------------------------------------------------------------
 # Security Audit
@@ -189,18 +225,23 @@ if [ -z "$SSHD_EFFECTIVE" ] && [ ! -r /etc/ssh/sshd_config ]; then
     check_security "SSH Configuration" "WARN" "Could not read effective SSH config (run as root; is openssh-server installed?)"
 else
     # PermitRootLogin
-    SSH_ROOT=$(sshd_get "permitrootlogin"); SSH_ROOT=${SSH_ROOT:-prohibit-password}
+    SSH_ROOT=$(sshd_get "permitrootlogin")
+    SSH_ROOT=${SSH_ROOT:-prohibit-password}
     case "$SSH_ROOT" in
         no)
-            check_security "SSH Root Login" "PASS" "Root login is disabled (PermitRootLogin no)" ;;
-        prohibit-password|forced-commands-only|without-password)
-            check_security "SSH Root Login" "WARN" "Root login restricted to keys only ($SSH_ROOT) - set 'PermitRootLogin no' for full lockout" ;;
+            check_security "SSH Root Login" "PASS" "Root login is disabled (PermitRootLogin no)"
+            ;;
+        prohibit-password | forced-commands-only | without-password)
+            check_security "SSH Root Login" "WARN" "Root login restricted to keys only ($SSH_ROOT) - set 'PermitRootLogin no' for full lockout"
+            ;;
         *)
-            check_security "SSH Root Login" "FAIL" "Root login is allowed ($SSH_ROOT) - set 'PermitRootLogin no' in /etc/ssh/sshd_config" ;;
+            check_security "SSH Root Login" "FAIL" "Root login is allowed ($SSH_ROOT) - set 'PermitRootLogin no' in /etc/ssh/sshd_config"
+            ;;
     esac
 
     # PasswordAuthentication
-    SSH_PASSWORD=$(sshd_get "passwordauthentication"); SSH_PASSWORD=${SSH_PASSWORD:-yes}
+    SSH_PASSWORD=$(sshd_get "passwordauthentication")
+    SSH_PASSWORD=${SSH_PASSWORD:-yes}
     if [ "$SSH_PASSWORD" = "no" ]; then
         check_security "SSH Password Auth" "PASS" "Password authentication is disabled, key-based auth only"
     else
@@ -209,7 +250,8 @@ else
 
     # Port
     UNPRIV_START=$(sysctl -n net.ipv4.ip_unprivileged_port_start 2>/dev/null || echo 1024)
-    SSH_PORT=$(sshd_get "port"); SSH_PORT=${SSH_PORT:-22}
+    SSH_PORT=$(sshd_get "port")
+    SSH_PORT=${SSH_PORT:-22}
     if [ "$SSH_PORT" = "22" ]; then
         check_security "SSH Port" "WARN" "Using default port 22 - a non-standard port reduces automated scanning noise"
     elif [ "$SSH_PORT" -ge "$UNPRIV_START" ] 2>/dev/null; then
@@ -237,7 +279,7 @@ check_firewall_status() {
         fi
     elif command -v nft >/dev/null 2>&1 && [ -n "$(nft list ruleset 2>/dev/null)" ]; then
         if nft list ruleset 2>/dev/null | grep -qE 'hook[[:space:]]+input' \
-           && nft list ruleset 2>/dev/null | grep -qE 'policy[[:space:]]+drop|(drop|reject)$'; then
+            && nft list ruleset 2>/dev/null | grep -qE 'policy[[:space:]]+drop|(drop|reject)$'; then
             check_security "Firewall Status (nftables)" "PASS" "nftables has an input chain with a drop/reject policy"
         else
             check_security "Firewall Status (nftables)" "WARN" "nftables ruleset present but no restrictive input policy detected"
@@ -269,10 +311,17 @@ else
 fi
 
 # Intrusion prevention (Fail2ban / CrowdSec, host or container)
-IPS_INSTALLED=0; IPS_ACTIVE=0
+IPS_INSTALLED=0
+IPS_ACTIVE=0
 if command -v dpkg >/dev/null 2>&1; then
-    if dpkg -l 2>/dev/null | grep -q "fail2ban"; then IPS_INSTALLED=1; systemctl is-active --quiet fail2ban && IPS_ACTIVE=1; fi
-    if dpkg -l 2>/dev/null | grep -q "crowdsec"; then IPS_INSTALLED=1; systemctl is-active --quiet crowdsec && IPS_ACTIVE=1; fi
+    if dpkg -l 2>/dev/null | grep -q "fail2ban"; then
+        IPS_INSTALLED=1
+        systemctl is-active --quiet fail2ban && IPS_ACTIVE=1
+    fi
+    if dpkg -l 2>/dev/null | grep -q "crowdsec"; then
+        IPS_INSTALLED=1
+        systemctl is-active --quiet crowdsec && IPS_ACTIVE=1
+    fi
 fi
 if command -v docker >/dev/null 2>&1 && systemctl is-active --quiet docker; then
     if docker ps -a --format '{{.Image}} {{.Names}}' 2>/dev/null | grep -qiE 'fail2ban|crowdsec'; then
@@ -283,7 +332,7 @@ fi
 case "$IPS_INSTALLED$IPS_ACTIVE" in
     "11") check_security "Intrusion Prevention" "PASS" "Fail2ban or CrowdSec is installed and running" ;;
     "10") check_security "Intrusion Prevention" "WARN" "Fail2ban or CrowdSec is installed but not running" ;;
-    *)    check_security "Intrusion Prevention" "FAIL" "No intrusion prevention system (Fail2ban or CrowdSec) is installed" ;;
+    *) check_security "Intrusion Prevention" "FAIL" "No intrusion prevention system (Fail2ban or CrowdSec) is installed" ;;
 esac
 
 # --------------------------------------------------------------------------
@@ -306,7 +355,8 @@ elif command -v journalctl >/dev/null 2>&1; then
 else
     check_security "Auth Log" "WARN" "No readable auth log or journal - cannot assess failed logins (run as root?)"
 fi
-FAILED_LOGINS=$(printf '%s' "$FAILED_LOGINS" | tr -cd '0-9'); FAILED_LOGINS=${FAILED_LOGINS:-0}
+FAILED_LOGINS=$(printf '%s' "$FAILED_LOGINS" | tr -cd '0-9')
+FAILED_LOGINS=${FAILED_LOGINS:-0}
 FAILED_LOGINS=$((10#$FAILED_LOGINS))
 
 if [ "$FAILED_LOGINS" -lt 10 ]; then
@@ -355,24 +405,26 @@ else
 fi
 
 if [ -n "$LISTEN_RAW" ]; then
-    ALL_PORTS=(); PUBLIC_PORTS=()
+    ALL_PORTS=()
+    PUBLIC_PORTS=()
     while IFS= read -r entry; do
         [ -z "$entry" ] && continue
         port=${entry##*:}
         addr=${entry%:*}
-        addr=${addr#[}; addr=${addr%]}        # strip IPv6 brackets
+        addr=${addr#[}
+        addr=${addr%]} # strip IPv6 brackets
         [[ "$port" =~ ^[0-9]+$ ]] || continue
         ALL_PORTS+=("$port")
         case "$addr" in
-            127.0.0.1|::1|localhost) ;;        # loopback = not exposed
-            *)                        PUBLIC_PORTS+=("$port") ;;
+            127.0.0.1 | ::1 | localhost) ;; # loopback = not exposed
+            *) PUBLIC_PORTS+=("$port") ;;
         esac
-    done <<< "$LISTEN_RAW"
+    done <<<"$LISTEN_RAW"
 
-    TOTAL_UNIQ=$(printf '%s\n' "${ALL_PORTS[@]}"    | sort -un | tr '\n' ',' | sed 's/,$//')
-    PUB_UNIQ=$(printf '%s\n'   "${PUBLIC_PORTS[@]}" | sort -un | tr '\n' ',' | sed 's/,$//')
-    TOTAL_N=$(printf '%s\n' "${ALL_PORTS[@]}"    | sort -un | grep -c .)
-    PUB_N=$(printf '%s\n'   "${PUBLIC_PORTS[@]}" | sort -un | grep -c .)
+    TOTAL_UNIQ=$(printf '%s\n' "${ALL_PORTS[@]}" | sort -un | tr '\n' ',' | sed 's/,$//')
+    PUB_UNIQ=$(printf '%s\n' "${PUBLIC_PORTS[@]}" | sort -un | tr '\n' ',' | sed 's/,$//')
+    TOTAL_N=$(printf '%s\n' "${ALL_PORTS[@]}" | sort -un | grep -c .)
+    PUB_N=$(printf '%s\n' "${PUBLIC_PORTS[@]}" | sort -un | grep -c .)
 
     if [ "$PUB_N" -lt 3 ]; then
         check_security "Port Security" "PASS" "$PUB_N internet-facing ports [$PUB_UNIQ] (total listening: $TOTAL_N [$TOTAL_UNIQ])"
@@ -462,21 +514,24 @@ fi
 # --------------------------------------------------------------------------
 SUID_LIST=$(find / -xdev -type f -perm -4000 \
     ! -path '/proc/*' ! -path '/sys/*' ! -path '/run/*' 2>/dev/null)
-SUID_TOTAL=$(printf '%s\n' "$SUID_LIST" | grep -c . )
+SUID_TOTAL=$(printf '%s\n' "$SUID_LIST" | grep -c .)
 
-if command -v dpkg >/dev/null 2>&1; then PKG_VERIFY="dpkg -S";
+if command -v dpkg >/dev/null 2>&1; then
+    PKG_VERIFY="dpkg -S"
 elif command -v rpm >/dev/null 2>&1; then PKG_VERIFY="rpm -qf"; else PKG_VERIFY=""; fi
 
 if [ -z "$SUID_LIST" ]; then
     check_security "SUID Files" "PASS" "No SUID-root files found"
 elif [ -n "$PKG_VERIFY" ]; then
-    UNOWNED=0; UNOWNED_LIST=""
+    UNOWNED=0
+    UNOWNED_LIST=""
     while IFS= read -r f; do
         [ -z "$f" ] && continue
         if ! $PKG_VERIFY "$f" >/dev/null 2>&1; then
-            UNOWNED=$((UNOWNED+1)); UNOWNED_LIST="$UNOWNED_LIST $f"
+            UNOWNED=$((UNOWNED + 1))
+            UNOWNED_LIST="$UNOWNED_LIST $f"
         fi
-    done <<< "$SUID_LIST"
+    done <<<"$SUID_LIST"
     if [ "$UNOWNED" -eq 0 ]; then
         check_security "SUID Files" "PASS" "$SUID_TOTAL SUID files, all owned by installed packages"
     else
@@ -495,7 +550,7 @@ fi
     echo "System: $(hostname) | $(uname -r) | $OS_INFO"
     echo "================================"
     echo "End of VPS Audit Report"
-} >> "$REPORT_FILE"
+} >>"$REPORT_FILE"
 chmod 600 "$REPORT_FILE" 2>/dev/null || true
 
 EXIT_CODE=0
@@ -511,7 +566,8 @@ if $JSON_OUTPUT; then
     printf '  "results": [\n'
     n=${#JSON_ITEMS[@]}
     for i in "${!JSON_ITEMS[@]}"; do
-        sep=","; [ "$i" -eq "$((n-1))" ] && sep=""
+        sep=","
+        [ "$i" -eq "$((n - 1))" ] && sep=""
         printf '    %s%s\n' "${JSON_ITEMS[$i]}" "$sep"
     done
     printf '  ]\n}\n'
