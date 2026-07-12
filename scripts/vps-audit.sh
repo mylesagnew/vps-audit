@@ -12,15 +12,25 @@
 #   #6 Password policy: comment-aware, >=12, checks pwquality.conf.d + PAM
 #   #7 SSH parsed from `sshd -T` effective config (not brittle grep)
 #   #8 Exit code + --json output so it can gate a CI/CD pipeline
+#   #9 Hardened root execution: safe PATH/IFS, symlink/clobber-safe report FD
+#  #10 External public-IP lookup can be disabled with --no-public-ip
 #
 set -uo pipefail
 umask 077
+
+# Harden the execution environment BEFORE running any command. This script is
+# meant to run as root; a poisoned PATH/IFS could otherwise execute an
+# attacker-controlled binary named date/curl/find/etc. with root privileges.
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+IFS=$' \t\n'
 
 # ---------------------------------------------------------------------------
 # Argument parsing (#8)
 # ---------------------------------------------------------------------------
 JSON_OUTPUT=false
 STRICT=false
+PUBLIC_IP_LOOKUP=true
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 REPORT_FILE="vps-audit-report-${TIMESTAMP}.txt"
 
@@ -33,7 +43,9 @@ Usage: vps-audit.sh [options]
 Options:
   --json            Emit machine-readable JSON to stdout (suppresses colour UI)
   --strict          Exit non-zero on WARN as well as FAIL (default: FAIL only)
+  --no-public-ip    Skip the external public-IP lookup (api.ipify.org)
   -o, --output FILE Write the text report to FILE (default: vps-audit-report-<ts>.txt)
+                    Refuses symlinks and will not overwrite an existing file.
   -h, --help        Show this help and exit
 
 Exit codes:
@@ -47,6 +59,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --json) JSON_OUTPUT=true ;;
         --strict) STRICT=true ;;
+        --no-public-ip) PUBLIC_IP_LOOKUP=false ;;
         -o | --output)
             shift
             [ $# -gt 0 ] || {
@@ -109,19 +122,52 @@ json_escape() {
     printf '%s' "$s"
 }
 
+# safe_open_report: validate the (possibly user-supplied) report path and open
+# it on FD 3. Refuses to follow symlinks or clobber existing/non-regular files,
+# so `-o <target>` run as root cannot destroy arbitrary files.
+safe_open_report() {
+    local path="$1" parent
+    parent=$(dirname -- "$path")
+
+    if [ ! -d "$parent" ]; then
+        printf 'error: output parent directory does not exist: %s\n' "$parent" >&2
+        exit 2
+    fi
+    if [ -L "$path" ]; then
+        printf 'error: refusing to write report through a symlink: %s\n' "$path" >&2
+        exit 2
+    fi
+    if [ -e "$path" ] && [ ! -f "$path" ]; then
+        printf 'error: refusing to write report to a non-regular file: %s\n' "$path" >&2
+        exit 2
+    fi
+
+    # Refuse to overwrite an existing file (noclobber); create it exclusively.
+    if ! (
+        set -o noclobber
+        : >"$path"
+    ) 2>/dev/null; then
+        printf 'error: refusing to overwrite existing output file: %s\n' "$path" >&2
+        exit 2
+    fi
+
+    chmod 600 "$path" 2>/dev/null || true
+    exec 3>"$path"
+}
+
 print_header() {
     local header="$1"
     say "\n${BLUE}${BOLD}$header${NC}"
     {
         echo -e "\n$header"
         echo "================================"
-    } >>"$REPORT_FILE"
+    } >&3
 }
 
 print_info() {
     local label="$1" value="$2"
     say "${BOLD}$label:${NC} $value"
-    echo "$label: $value" >>"$REPORT_FILE"
+    echo "$label: $value" >&3
 }
 
 check_security() {
@@ -143,7 +189,7 @@ check_security() {
     {
         echo "[$status] $test_name - $message"
         echo ""
-    } >>"$REPORT_FILE"
+    } >&3
     JSON_ITEMS+=("{\"test\":\"$(json_escape "$test_name")\",\"status\":\"$status\",\"message\":\"$(json_escape "$message")\"}")
 }
 
@@ -154,12 +200,15 @@ say "${BLUE}${BOLD}VPS Security Audit Tool${NC}"
 say "${GRAY}https://github.com/mylesagnew/vps-audit${NC}"
 say "${GRAY}Starting audit at $(date)${NC}\n"
 
+# Validate and open the report on FD 3 (refuses symlink/overwrite; chmod 600).
+safe_open_report "$REPORT_FILE"
+
 {
     echo "VPS Security Audit Tool"
     echo "https://github.com/mylesagnew/vps-audit"
     echo "Starting audit at $(date)"
     echo "================================"
-} >"$REPORT_FILE"
+} >&3
 
 # ---------------------------------------------------------------------------
 # System Information
@@ -174,7 +223,11 @@ CPU_INFO=$(lscpu 2>/dev/null | grep "Model name" | cut -d':' -f2 | xargs)
 CPU_CORES=$(nproc 2>/dev/null)
 TOTAL_MEM=$(free -h | awk '/^Mem:/ {print $2}')
 TOTAL_DISK=$(df -h / | awk 'NR==2 {print $2}')
-PUBLIC_IP=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null || echo "unavailable")
+if $PUBLIC_IP_LOOKUP; then
+    PUBLIC_IP=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null || echo "unavailable")
+else
+    PUBLIC_IP="skipped (--no-public-ip)"
+fi
 LOAD_AVERAGE=$(uptime | awk -F'load average:' '{print $2}' | xargs)
 
 print_info "Hostname" "$(hostname)"
@@ -187,7 +240,7 @@ print_info "Total Memory" "$TOTAL_MEM"
 print_info "Total Disk Space" "$TOTAL_DISK"
 print_info "Public IP" "$PUBLIC_IP"
 print_info "Load Average" "$LOAD_AVERAGE"
-echo "" >>"$REPORT_FILE"
+echo "" >&3
 
 # ---------------------------------------------------------------------------
 # Security Audit
@@ -574,8 +627,8 @@ fi
     echo "System: $(hostname) | $(uname -r) | $OS_INFO"
     echo "================================"
     echo "End of VPS Audit Report"
-} >>"$REPORT_FILE"
-chmod 600 "$REPORT_FILE" 2>/dev/null || true
+} >&3
+exec 3>&-
 
 EXIT_CODE=0
 [ "$FAIL_COUNT" -gt 0 ] && EXIT_CODE=1

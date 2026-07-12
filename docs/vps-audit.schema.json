@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mylesagnew/vps-audit/blob/main/docs/vps-audit.schema.json",
+  "title": "VPS Audit JSON output",
+  "description": "Schema for the JSON emitted by vps-audit.sh --json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["timestamp", "hostname", "summary", "exit_code", "results"],
+  "properties": {
+    "timestamp": {
+      "type": "string",
+      "description": "Report timestamp, format YYYYMMDD_HHMMSS",
+      "pattern": "^[0-9]{8}_[0-9]{6}$"
+    },
+    "hostname": {
+      "type": "string"
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pass", "warn", "fail"],
+      "properties": {
+        "pass": { "type": "integer", "minimum": 0 },
+        "warn": { "type": "integer", "minimum": 0 },
+        "fail": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "exit_code": {
+      "type": "integer",
+      "enum": [0, 1],
+      "description": "0 = no FAIL (and no WARN under --strict); 1 = findings"
+    },
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["test", "status", "message"],
+        "properties": {
+          "test": { "type": "string" },
+          "status": { "type": "string", "enum": ["PASS", "WARN", "FAIL"] },
+          "message": { "type": "string" }
+        }
+      }
+    }
+  }
+}
