@@ -5,6 +5,28 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.0] - 2026-07-13
+
+Enterprise/operational output and configurability. All additive.
+
+### Added
+- **Severity + remediation per check**: every result now includes a `severity`
+  (`critical`/`high`/`medium`/`low`/`info`, the control's inherent risk weight)
+  and a `remediation` string, from a pure, unit-tested `meta_for()` table.
+- **`not_applicable` (NA) status**: checks that don't apply to the host (e.g. apt
+  checks on a non-Debian system) report `NA` instead of a misleading `WARN`. `NA`
+  never affects the exit code; the summary gains a `not_applicable` count.
+- **Tool provenance in JSON**: a top-level `tool { name, version, commit }`.
+  Released artifacts have the real commit stamped in by the release workflow.
+- **Policy files (`--policy FILE`)**: tune thresholds (failed logins, running
+  services, public ports, disk/mem/cpu) per host role without editing the script.
+  Parsed safely (`KEY=INTEGER`, never sourced); unknown keys/values are rejected.
+  Ships example + `web`/`database`/`bastion` role policies under `config/`.
+- **Scheduling examples**: systemd service+timer and cron under `examples/`, with
+  a deployment guide at `docs/deployment.md`.
+- New tests: `meta_for` coverage, `load_policy` parsing/rejection, and JSON
+  severity/remediation/tool assertions. Schema + sample report updated.
+
 ## [3.1.0] - 2026-07-13
 
 Safety-hardening follow-up (three high-priority fixes).
@@ -136,6 +158,7 @@ CI/CD gate. **Breaking:** the script now exits non-zero when checks fail.
 - Corrected repository attribution (fork of `vernu/vps-audit`, maintained by
   `mylesagnew`).
 
+[3.2.0]: https://github.com/mylesagnew/vps-audit/releases/tag/v3.2.0
 [3.1.0]: https://github.com/mylesagnew/vps-audit/releases/tag/v3.1.0
 [3.0.0]: https://github.com/mylesagnew/vps-audit/releases/tag/v3.0.0
 [2.1.0]: https://github.com/mylesagnew/vps-audit/releases/tag/v2.1.0

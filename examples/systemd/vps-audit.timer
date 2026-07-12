@@ -1,0 +1,19 @@
+# /etc/systemd/system/vps-audit.timer
+# Runs vps-audit.service daily. Enable with:
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now vps-audit.timer
+# Check status / next run:
+#   systemctl list-timers vps-audit.timer
+[Unit]
+Description=Run the VPS security audit daily
+Documentation=https://github.com/mylesagnew/vps-audit
+
+[Timer]
+OnCalendar=daily
+# Spread load / avoid a thundering herd across a fleet.
+RandomizedDelaySec=30m
+# Run at next boot if the machine was off at the scheduled time.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

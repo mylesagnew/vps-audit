@@ -1,0 +1,12 @@
+# /etc/cron.d/vps-audit
+# Weekly VPS security audit (Sundays 03:30). Runs as root; writes a timestamped
+# report into /var/log/vps-audit (create it first: install -d -m 0700 /var/log/vps-audit).
+#
+# The report dir must exist and be root-only. The audit exits non-zero on
+# findings; cron will email root the stderr/stdout unless you redirect it.
+#
+#  m  h dom mon dow  user  command
+30 3 * * 0  root  cd /var/log/vps-audit && /usr/local/bin/vps-audit.sh --strict >/dev/null 2>&1 || true
+
+# JSON variant for a SIEM/log pipeline (one JSON document per run):
+# 30 3 * * 0  root  /usr/local/bin/vps-audit.sh --json >/var/log/vps-audit/audit-$(date +\%Y\%m\%d).json 2>/dev/null || true

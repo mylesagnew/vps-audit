@@ -35,17 +35,20 @@ Validates against [`vps-audit.schema.json`](vps-audit.schema.json).
 
 ```json
 {
+  "tool": { "name": "vps-audit", "version": "3.2.0", "commit": "1a2b3c4" },
   "timestamp": "20260712_034653",
   "hostname": "web-01",
-  "summary": { "pass": 14, "warn": 2, "fail": 1 },
+  "summary": { "pass": 14, "warn": 2, "fail": 1, "not_applicable": 0 },
   "exit_code": 1,
   "results": [
-    { "id": "system-restart", "test": "System Restart", "status": "PASS", "message": "No restart required" },
-    { "id": "ssh-root-login", "test": "SSH Root Login", "status": "PASS", "message": "Root login is disabled (PermitRootLogin no)" },
-    { "id": "system-updates", "test": "System Updates", "status": "FAIL", "message": "2 security update(s) pending (of 5 total) - apply immediately (run 'apt update' first for accuracy)" }
+    { "id": "system-restart", "test": "System Restart", "status": "PASS", "severity": "low", "message": "No restart required", "remediation": "Reboot during a maintenance window to apply pending kernel/library updates." },
+    { "id": "ssh-root-login", "test": "SSH Root Login", "status": "PASS", "severity": "high", "message": "Root login is disabled (PermitRootLogin no)", "remediation": "Set 'PermitRootLogin no' in /etc/ssh/sshd_config and reload sshd." },
+    { "id": "system-updates", "test": "System Updates", "status": "FAIL", "severity": "high", "message": "2 security update(s) pending (of 5 total) - apply immediately (run 'apt update' first for accuracy)", "remediation": "Apply pending security updates: apt-get update && apt-get upgrade." }
   ]
 }
 ```
+
+`severity` is the control's inherent risk weight (`critical`/`high`/`medium`/`low`/`info`) and is present regardless of `status` — combine the two for triage. `status` may be `NA` (not applicable to this host, e.g. apt checks on a non-Debian system); `NA` never affects `exit_code`.
 
 Validate locally:
 

@@ -150,6 +150,7 @@ sudo ./vps-audit.sh -o /var/log/vps-audit.txt
 | `--strict` | Exit non-zero on `WARN` as well as `FAIL`. |
 | `--public-ip` | Enable the external public-IP lookup (`api.ipify.org`). Off by default. |
 | `--no-public-ip` | Explicitly disable the public-IP lookup (the default; kept for backward compatibility). |
+| `--policy FILE` | Load threshold overrides from `FILE` (see [Policy files](#policy-files)). |
 | `-o, --output FILE` | Write the report to `FILE`. Refuses symlinks, existing files, and unsafe (world-writable, non-sticky) parent directories. |
 | `-h, --help` | Show help and exit. |
 
@@ -159,13 +160,44 @@ sudo ./vps-audit.sh -o /var/log/vps-audit.txt
 |------|---------|
 | `0` | No `FAIL` findings (and, unless `--strict`, `WARN` is allowed). |
 | `1` | One or more `FAIL` findings (or any `WARN` under `--strict`). |
-| `2` | Usage error (unknown flag / missing argument / unsafe `--output`). |
+| `2` | Usage error (unknown flag / missing argument / unsafe `--output` / bad `--policy`). |
+
+`NA` (not applicable, e.g. apt checks on a non-Debian host) never affects the exit code.
 
 Example pipeline step that fails the build on any `FAIL` or `WARN`:
 
 ```bash
 sudo ./vps-audit.sh --json --strict > audit.json
 ```
+
+### JSON output
+
+`--json` emits a document validated by [`docs/vps-audit.schema.json`](docs/vps-audit.schema.json).
+Each result carries a stable `id`, a `severity` (`critical`/`high`/`medium`/`low`/`info`),
+a `remediation` string, and a `status` of `PASS`/`WARN`/`FAIL`/`NA`. The top level
+includes `tool` (name/version/commit) for provenance and a `summary` with
+`not_applicable` counts. See [`docs/sample-report.md`](docs/sample-report.md).
+
+### Policy files
+
+Thresholds (failed logins, running services, public ports, disk/mem/cpu) can be
+tuned per host role without editing the script:
+
+```bash
+sudo ./vps-audit.sh --policy config/roles/web.conf
+```
+
+Ready-made role policies live in [`config/roles/`](config/roles) (`web`,
+`database`, `bastion`); every tunable key and its default is documented in
+[`config/vps-audit.example.conf`](config/vps-audit.example.conf). Policy files are
+parsed safely (`KEY=INTEGER` only — never sourced), and unknown keys or
+non-integer values are rejected.
+
+### Scheduling
+
+For recurring runs, see [`docs/deployment.md`](docs/deployment.md) — it covers a
+**systemd** service+timer and a **cron** example, with ready-to-copy unit files
+in [`examples/`](examples).
 
 ## Output Format
 
@@ -243,9 +275,11 @@ The repository is laid out as:
 ```
 .
 ├── scripts/vps-audit.sh          # the audit script
+├── config/                       # policy files (example + web/database/bastion roles)
+├── examples/                     # systemd service+timer and cron examples
 ├── tests/bats/                   # Bats test suite
-├── docs/                         # screenshot, sample report, JSON schema
-└── .github/workflows/lint.yml    # ShellCheck + shfmt + Bats CI
+├── docs/                         # screenshot, sample report, JSON schema, deployment
+└── .github/workflows/            # lint.yml (CI) + release.yml (signed releases)
 ```
 
 To run the checks locally:

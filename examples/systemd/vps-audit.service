@@ -1,0 +1,30 @@
+# /etc/systemd/system/vps-audit.service
+# One-shot audit run. Paired with vps-audit.timer for scheduling.
+[Unit]
+Description=VPS security audit
+Documentation=https://github.com/mylesagnew/vps-audit
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# The report directory must exist and be root-owned, mode 0700.
+ExecStartPre=/usr/bin/install -d -m 0700 -o root -g root /var/log/vps-audit
+# Run from the report dir so the script writes its own timestamped file
+# (vps-audit-report-<TIMESTAMP>.txt, mode 0600). --strict makes WARNs fail too.
+WorkingDirectory=/var/log/vps-audit
+ExecStart=/usr/local/bin/vps-audit.sh --strict
+# Optionally load a role policy:
+#   ExecStart=/usr/local/bin/vps-audit.sh --strict --policy /etc/vps-audit.conf
+User=root
+# Light hardening for the audit process itself.
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/log/vps-audit
+PrivateTmp=true
+# Type=oneshot audits are expected to exit non-zero on findings; don't let that
+# mark the unit "failed" in status. Remove this line if you want failures to show.
+SuccessExitStatus=0 1
+
+[Install]
+WantedBy=multi-user.target

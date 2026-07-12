@@ -6,8 +6,9 @@
 # deterministic.
 
 setup() {
+    SCRIPT="${BATS_TEST_DIRNAME}/../../scripts/vps-audit.sh"
     # Sourcing must not execute the audit.
-    source "${BATS_TEST_DIRNAME}/../../scripts/vps-audit.sh"
+    source "$SCRIPT"
 }
 
 status_of() { printf '%s' "${1%%|*}"; }
@@ -70,4 +71,50 @@ status_of() { printf '%s' "${1%%|*}"; }
     [ "$(status_of "$(eval_updates 2 5)")" = FAIL ]
     [ "$(status_of "$(eval_updates 0 5)")" = WARN ]
     [ "$(status_of "$(eval_updates 0 0)")" = PASS ]
+}
+
+# --- check metadata (severity + remediation) ----------------------------
+
+@test "meta_for returns a valid severity and non-empty remediation for known ids" {
+    local id meta sev rem
+    for id in ssh-root-login firewall failed-logins system-updates port-security \
+        suid-files password-policy sudo-logging disk-usage; do
+        meta="$(meta_for "$id")"
+        sev="${meta%%|*}"
+        rem="${meta#*|}"
+        case "$sev" in
+            critical | high | medium | low | info) ;;
+            *) printf 'bad severity for %s: %s\n' "$id" "$sev" >&2; return 1 ;;
+        esac
+        [ -n "$rem" ] || { printf 'empty remediation for %s\n' "$id" >&2; return 1; }
+    done
+}
+
+@test "meta_for falls back to info/empty for unknown ids" {
+    [ "$(meta_for definitely-not-a-real-id)" = "info|" ]
+}
+
+# --- policy parser -------------------------------------------------------
+
+@test "load_policy overrides known threshold keys" {
+    DISK_WARN=50 DISK_FAIL=80
+    local f
+    f="$(mktemp)"
+    printf '# role: db\nDISK_WARN = 60\nDISK_FAIL=85\n\n' >"$f"
+    load_policy "$f"
+    rm -f "$f"
+    [ "$DISK_WARN" = 60 ]
+    [ "$DISK_FAIL" = 85 ]
+}
+
+@test "load_policy rejects unknown keys and non-integer values" {
+    local f
+    f="$(mktemp)"
+    printf 'BOGUS=1\n' >"$f"
+    run bash -c 'source "'"$SCRIPT"'"; load_policy "'"$f"'"'
+    [ "$status" -eq 2 ]
+    printf 'CPU_WARN=notanumber\n' >"$f"
+    run bash -c 'source "'"$SCRIPT"'"; load_policy "'"$f"'"'
+    [ "$status" -eq 2 ]
+    rm -f "$f"
 }
