@@ -13,7 +13,7 @@
 #   #7 SSH parsed from `sshd -T` effective config (not brittle grep)
 #   #8 Exit code + --json output so it can gate a CI/CD pipeline
 #   #9 Hardened root execution: safe PATH/IFS, symlink/clobber-safe report FD
-#  #10 External public-IP lookup can be disabled with --no-public-ip
+#  #10 External public-IP lookup is opt-in (--public-ip); off by default
 #  #11 Race-free report open (atomic O_CREAT|O_EXCL; no chmod-by-name re-open)
 #  #12 Stable, machine-readable check IDs in JSON output
 #  #13 Decision logic factored into pure eval_* functions (unit-testable);
@@ -125,14 +125,23 @@ json_escape() {
 #   Race-free: the friendly checks are advisory, but the actual creation uses a
 #   single atomic O_CREAT|O_EXCL open (via noclobber) that fails without writing
 #   if the path was swapped for a file or symlink after the checks (TOCTOU).
-#   umask 077 makes the new file mode 0600, so there is no post-open chmod (which
-#   would re-open the path by name and re-open the race).
+#   O_EXCL also refuses a symlink at the final path component, giving the same
+#   protection as O_NOFOLLOW for the created file. umask 077 makes the new file
+#   mode 0600, so there is no post-open chmod (which would re-open the path by
+#   name and re-open the race).
 safe_open_report() {
     local path="$1" parent
     parent=$(dirname -- "$path")
 
     if [ ! -d "$parent" ]; then
         printf 'error: output parent directory does not exist: %s\n' "$parent" >&2
+        exit 2
+    fi
+    # Refuse a world-writable parent that lacks the sticky bit: another user
+    # could create or swap the path out from under us. Sticky dirs (e.g. /tmp,
+    # mode 1777) are fine because only the owner can rename/delete entries.
+    if [ -n "$(find "$parent" -maxdepth 0 -type d -perm -0002 ! -perm -1000 2>/dev/null)" ]; then
+        printf 'error: refusing to write into a world-writable directory without the sticky bit: %s\n' "$parent" >&2
         exit 2
     fi
     if [ -L "$path" ]; then
@@ -148,6 +157,8 @@ safe_open_report() {
         exit 2
     fi
 
+    # Atomic O_CREAT|O_EXCL open (noclobber). O_NOFOLLOW-equivalent: refuses a
+    # symlink final component and never overwrites an existing file.
     if ! {
         set -o noclobber
         exec 3>"$path"
@@ -219,7 +230,10 @@ Usage: vps-audit.sh [options]
 Options:
   --json            Emit machine-readable JSON to stdout (suppresses colour UI)
   --strict          Exit non-zero on WARN as well as FAIL (default: FAIL only)
-  --no-public-ip    Skip the external public-IP lookup (api.ipify.org)
+  --public-ip       Enable the external public-IP lookup (api.ipify.org).
+                    Off by default: no external calls are made unless requested.
+  --no-public-ip    Explicitly disable the public-IP lookup (default; kept for
+                    backward compatibility)
   -o, --output FILE Write the text report to FILE (default: vps-audit-report-<ts>.txt)
                     Refuses symlinks and will not overwrite an existing file.
   -h, --help        Show this help and exit
@@ -248,7 +262,9 @@ main() {
 
     JSON_OUTPUT=false
     STRICT=false
-    PUBLIC_IP_LOOKUP=true
+    # Off by default (no external calls) for compliance-sensitive environments;
+    # enable with --public-ip. --no-public-ip is kept for backward compatibility.
+    PUBLIC_IP_LOOKUP=false
     PASS_COUNT=0
     WARN_COUNT=0
     FAIL_COUNT=0
@@ -260,7 +276,8 @@ main() {
         case "$1" in
             --json) JSON_OUTPUT=true ;;
             --strict) STRICT=true ;;
-            --no-public-ip) PUBLIC_IP_LOOKUP=false ;;
+            --public-ip) PUBLIC_IP_LOOKUP=true ;;
+            --no-public-ip) PUBLIC_IP_LOOKUP=false ;; # kept for backward compat (now the default)
             -o | --output)
                 shift
                 [ $# -gt 0 ] || {
@@ -327,7 +344,7 @@ main() {
     if $PUBLIC_IP_LOOKUP; then
         PUBLIC_IP=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null || echo "unavailable")
     else
-        PUBLIC_IP="skipped (--no-public-ip)"
+        PUBLIC_IP="not checked (pass --public-ip to enable)"
     fi
     LOAD_AVERAGE=$(uptime | awk -F'load average:' '{print $2}' | xargs)
 

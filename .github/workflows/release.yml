@@ -5,15 +5,21 @@ on:
     tags:
       - "v*"
 
+# Least privilege at the top level; the release job elevates only what it needs.
 permissions:
-  contents: write # create the release
-  id-token: write # keyless signing (Sigstore) for provenance
-  attestations: write # record the build provenance attestation
+  contents: read
 
 jobs:
   release:
     name: Publish release artifacts
     runs-on: ubuntu-24.04
+    # Protected deployment environment: configure required reviewers / allowed
+    # tags on this environment in the repo settings to gate who can publish.
+    environment: release
+    permissions:
+      contents: write # create the release
+      id-token: write # keyless signing (Sigstore) for provenance
+      attestations: write # record the build provenance attestation
     steps:
       # actions/checkout v4.2.2
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -28,9 +34,11 @@ jobs:
           sha256sum vps-audit.sh > SHA256SUMS
           cat SHA256SUMS
 
-      # Signed build-provenance attestation (keyless, via Sigstore). Lets users
-      # verify the artifact was built by this workflow from this repo:
-      #   gh attestation verify vps-audit.sh --repo mylesagnew/vps-audit
+      # Signed build-provenance attestation (keyless, via Sigstore). Both the
+      # script AND the SHA256SUMS manifest are attested, so the checksum file is
+      # itself signed. Verify with:
+      #   gh attestation verify vps-audit.sh   --repo mylesagnew/vps-audit
+      #   gh attestation verify SHA256SUMS      --repo mylesagnew/vps-audit
       # actions/attest-build-provenance v4.1.1
       - name: Attest build provenance
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373

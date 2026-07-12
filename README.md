@@ -80,6 +80,8 @@ A comprehensive Bash script for auditing the security and performance of your VP
 
    ```bash
    gh attestation verify vps-audit.sh --repo mylesagnew/vps-audit
+   # the checksum manifest is signed too:
+   gh attestation verify SHA256SUMS --repo mylesagnew/vps-audit
    ```
 
 5. Make it executable:
@@ -116,17 +118,22 @@ assume the release layout (`./vps-audit.sh`); adjust the path if you cloned.
 
 3. Review the saved report. By default it is written to
    `vps-audit-report-<TIMESTAMP>.txt` in the current directory with `chmod 600`
-   permissions. (`--output` refuses to follow symlinks or overwrite an existing
-   file.)
+   permissions. (`--output` refuses symlinks, existing files, and world-writable
+   parent directories without the sticky bit.)
+
+> **No external calls by default.** The audit makes no network requests unless
+> you pass `--public-ip`, which fetches the host's public address from
+> `api.ipify.org`. This keeps runs safe for air-gapped and compliance-sensitive
+> environments.
 
 ### Common invocations
 
 ```bash
-# Standard audit (human-readable report):
+# Standard audit (human-readable report, fully offline):
 sudo ./vps-audit.sh
 
-# Skip the external public-IP lookup (fully offline):
-sudo ./vps-audit.sh --no-public-ip
+# Include the public-IP lookup (makes one external call to api.ipify.org):
+sudo ./vps-audit.sh --public-ip
 
 # Machine-readable output for automation:
 sudo ./vps-audit.sh --json > audit.json
@@ -141,8 +148,9 @@ sudo ./vps-audit.sh -o /var/log/vps-audit.txt
 |--------|-------------|
 | `--json` | Emit machine-readable JSON to stdout (suppresses the coloured UI). Validates against [`docs/vps-audit.schema.json`](docs/vps-audit.schema.json). |
 | `--strict` | Exit non-zero on `WARN` as well as `FAIL`. |
-| `--no-public-ip` | Skip the external public-IP lookup (`api.ipify.org`). |
-| `-o, --output FILE` | Write the report to `FILE`. Refuses symlinks and will not overwrite an existing file. |
+| `--public-ip` | Enable the external public-IP lookup (`api.ipify.org`). Off by default. |
+| `--no-public-ip` | Explicitly disable the public-IP lookup (the default; kept for backward compatibility). |
+| `-o, --output FILE` | Write the report to `FILE`. Refuses symlinks, existing files, and unsafe (world-writable, non-sticky) parent directories. |
 | `-h, --help` | Show help and exit. |
 
 ### Exit codes (for CI/CD gating)
