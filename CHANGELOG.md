@@ -5,6 +5,28 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.0] - 2026-07-13
+
+Safety-hardening follow-up (three high-priority fixes).
+
+### Security
+- **Stronger report-file creation**: `safe_open_report()` now refuses a
+  world-writable parent directory that lacks the sticky bit (another user could
+  swap the path), keeps the atomic `noclobber` open, and documents its
+  `O_EXCL`/`O_NOFOLLOW`-equivalent guarantee. New Bats tests cover unsafe
+  (world-writable, non-sticky) and safe (sticky) parents.
+- **Hardened release publishing**: top-level workflow permissions are now
+  `contents: read`, with `contents/id-token/attestations: write` granted only to
+  the release job; the job runs in a protected `release` environment (gate
+  publishers via repo settings). The `SHA256SUMS` manifest is attested
+  (signed) alongside the script.
+
+### Changed
+- **External public-IP lookup is now opt-in.** The audit makes no network calls
+  by default; pass `--public-ip` to enable the `api.ipify.org` lookup.
+  `--no-public-ip` is retained (now the default) for backward compatibility.
+  Safer for air-gapped and compliance-sensitive environments.
+
 ## [3.0.0] - 2026-07-13
 
 Follow-up hardening from a second review pass. **Breaking:** each JSON result
@@ -114,6 +136,7 @@ CI/CD gate. **Breaking:** the script now exits non-zero when checks fail.
 - Corrected repository attribution (fork of `vernu/vps-audit`, maintained by
   `mylesagnew`).
 
+[3.1.0]: https://github.com/mylesagnew/vps-audit/releases/tag/v3.1.0
 [3.0.0]: https://github.com/mylesagnew/vps-audit/releases/tag/v3.0.0
 [2.1.0]: https://github.com/mylesagnew/vps-audit/releases/tag/v2.1.0
 [2.0.0]: https://github.com/mylesagnew/vps-audit/releases/tag/v2.0.0

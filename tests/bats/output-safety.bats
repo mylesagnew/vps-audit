@@ -35,6 +35,24 @@ teardown() {
     [[ "$output" == *"parent directory"* ]]
 }
 
+@test "refuses a world-writable parent without the sticky bit" {
+    mkdir "$TMP/ww"
+    chmod 0777 "$TMP/ww"
+    run bash "$SCRIPT" --no-public-ip -o "$TMP/ww/report.txt"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"world-writable"* ]]
+    [ ! -e "$TMP/ww/report.txt" ]
+}
+
+@test "allows a world-writable parent WITH the sticky bit (e.g. /tmp-like)" {
+    mkdir "$TMP/sticky"
+    chmod 1777 "$TMP/sticky"
+    run bash "$SCRIPT" --no-public-ip -o "$TMP/sticky/report.txt"
+    [ "$status" -le 1 ]
+    [ -f "$TMP/sticky/report.txt" ]
+    [ "$(stat -c '%a' "$TMP/sticky/report.txt")" = "600" ]
+}
+
 @test "refuses a non-regular target (e.g. a directory)" {
     mkdir "$TMP/adir"
     run bash "$SCRIPT" --no-public-ip -o "$TMP/adir"
