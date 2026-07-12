@@ -35,9 +35,14 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["test", "status", "message"],
+        "required": ["id", "test", "status", "message"],
         "properties": {
-          "test": { "type": "string" },
+          "id": {
+            "type": "string",
+            "description": "Stable machine-readable check identifier (kebab-case), independent of display wording",
+            "pattern": "^[a-z0-9-]+$"
+          },
+          "test": { "type": "string", "description": "Human-readable check name" },
           "status": { "type": "string", "enum": ["PASS", "WARN", "FAIL"] },
           "message": { "type": "string" }
         }

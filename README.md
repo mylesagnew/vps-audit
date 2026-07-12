@@ -73,7 +73,16 @@ A comprehensive Bash script for auditing the security and performance of your VP
    sha256sum -c SHA256SUMS --ignore-missing
    ```
 
-4. Make it executable:
+4. (Recommended) Verify the signed build-provenance attestation with the
+   [GitHub CLI](https://cli.github.com/). This cryptographically confirms the
+   file was built by this repository's release workflow (keyless Sigstore
+   signing — no key to manage):
+
+   ```bash
+   gh attestation verify vps-audit.sh --repo mylesagnew/vps-audit
+   ```
+
+5. Make it executable:
 
    ```bash
    chmod +x vps-audit.sh

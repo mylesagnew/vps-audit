@@ -5,6 +5,35 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0] - 2026-07-13
+
+Follow-up hardening from a second review pass. **Breaking:** each JSON result
+now carries a stable `id` field (schema updated).
+
+### Security
+- **Race-free report open** — `safe_open_report()` now creates the report with a
+  single atomic `O_CREAT|O_EXCL` open (via `noclobber`) that fails without
+  writing if the path is swapped for a file or symlink after the pre-checks
+  (TOCTOU). `umask 077` yields mode `0600`, removing the post-open
+  `chmod`-by-name that previously re-opened the path.
+
+### Added
+- **Stable check IDs**: every JSON result includes a machine-readable `id`
+  (kebab-case, e.g. `ssh-root-login`, `firewall`, `suid-files`) that is decoupled
+  from the human name/message. Schema (`docs/vps-audit.schema.json`) updated to
+  require and pattern-validate `id`.
+- **Release signing/attestation**: the release workflow now produces a keyless
+  (Sigstore) build-provenance attestation for `vps-audit.sh` and `SHA256SUMS`,
+  verifiable with `gh attestation verify`.
+- **Mocked host-state tests** (`tests/bats/host-state.bats`): the script is now
+  sourceable (guarded `main`), and decision logic lives in pure `eval_*`
+  functions that are unit-tested against mocked states.
+
+### Changed
+- Refactored the audit body into a guarded `main()` plus pure evaluators; no
+  change to check outcomes on a real host.
+- README documents attestation verification in the install steps.
+
 ## [2.1.0] - 2026-07-12
 
 Hardening release addressing an independent Principal SecDevOps review, plus
@@ -85,5 +114,6 @@ CI/CD gate. **Breaking:** the script now exits non-zero when checks fail.
 - Corrected repository attribution (fork of `vernu/vps-audit`, maintained by
   `mylesagnew`).
 
+[3.0.0]: https://github.com/mylesagnew/vps-audit/releases/tag/v3.0.0
 [2.1.0]: https://github.com/mylesagnew/vps-audit/releases/tag/v2.1.0
 [2.0.0]: https://github.com/mylesagnew/vps-audit/releases/tag/v2.0.0

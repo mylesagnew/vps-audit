@@ -6,7 +6,9 @@ on:
       - "v*"
 
 permissions:
-  contents: write
+  contents: write # create the release
+  id-token: write # keyless signing (Sigstore) for provenance
+  attestations: write # record the build provenance attestation
 
 jobs:
   release:
@@ -25,6 +27,17 @@ jobs:
           cd dist
           sha256sum vps-audit.sh > SHA256SUMS
           cat SHA256SUMS
+
+      # Signed build-provenance attestation (keyless, via Sigstore). Lets users
+      # verify the artifact was built by this workflow from this repo:
+      #   gh attestation verify vps-audit.sh --repo mylesagnew/vps-audit
+      # actions/attest-build-provenance v4.1.1
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373
+        with:
+          subject-path: |
+            dist/vps-audit.sh
+            dist/SHA256SUMS
 
       - name: Extract changelog section for this tag
         run: |

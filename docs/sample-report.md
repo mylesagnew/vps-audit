@@ -40,9 +40,9 @@ Validates against [`vps-audit.schema.json`](vps-audit.schema.json).
   "summary": { "pass": 14, "warn": 2, "fail": 1 },
   "exit_code": 1,
   "results": [
-    { "test": "System Restart", "status": "PASS", "message": "No restart required" },
-    { "test": "SSH Root Login", "status": "PASS", "message": "Root login is disabled (PermitRootLogin no)" },
-    { "test": "System Updates", "status": "FAIL", "message": "2 security update(s) pending (of 5 total) - apply immediately (run 'apt update' first for accuracy)" }
+    { "id": "system-restart", "test": "System Restart", "status": "PASS", "message": "No restart required" },
+    { "id": "ssh-root-login", "test": "SSH Root Login", "status": "PASS", "message": "Root login is disabled (PermitRootLogin no)" },
+    { "id": "system-updates", "test": "System Updates", "status": "FAIL", "message": "2 security update(s) pending (of 5 total) - apply immediately (run 'apt update' first for accuracy)" }
   ]
 }
 ```
