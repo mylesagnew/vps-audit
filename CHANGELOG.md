@@ -5,6 +5,39 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-07-12
+
+Hardening release addressing an independent Principal SecDevOps review, plus
+repository restructure, a test suite, and supply-chain-safe CI/releases.
+
+### Security
+- **Root-run PATH hardening**: `PATH`/`IFS` are pinned before any command runs,
+  so a poisoned environment cannot execute attacker-controlled binaries as root.
+- **Safe report-file handling**: `--output` now refuses to follow symlinks or
+  overwrite existing/non-regular files, and validates the parent directory. The
+  report is opened once on a dedicated file descriptor. Prevents a root run from
+  clobbering arbitrary files.
+
+### Added
+- `--no-public-ip` to skip the external `api.ipify.org` lookup (offline mode).
+- Bats test suite (`tests/bats/`): argument parsing, output-file safety, and the
+  JSON contract.
+- CI jobs: `actionlint` (workflow lint) and `bats` (tests).
+- Supply-chain-safe release workflow (`.github/workflows/release.yml`) that
+  publishes `vps-audit.sh` + `SHA256SUMS` and release notes on tag push.
+- `.github/dependabot.yml` for weekly GitHub Actions updates.
+- JSON Schema (`docs/vps-audit.schema.json`) and a sample report
+  (`docs/sample-report.md`).
+
+### Changed
+- **Repository restructure**: the script now lives at `scripts/vps-audit.sh`
+  (was repo root); the screenshot moved to `docs/`.
+- CI is now supply-chain hardened: third-party actions are pinned to commit
+  SHAs, the `shfmt` and `actionlint` downloads are SHA256-verified, and runners
+  are pinned to `ubuntu-24.04`.
+- README rewritten with step-by-step, checksum-verified release installation and
+  a development/testing section.
+
 ## [2.0.0] - 2026-07-11
 
 Major correctness and automation overhaul. Several checks previously returned
@@ -52,4 +85,5 @@ CI/CD gate. **Breaking:** the script now exits non-zero when checks fail.
 - Corrected repository attribution (fork of `vernu/vps-audit`, maintained by
   `mylesagnew`).
 
+[2.1.0]: https://github.com/mylesagnew/vps-audit/releases/tag/v2.1.0
 [2.0.0]: https://github.com/mylesagnew/vps-audit/releases/tag/v2.0.0

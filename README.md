@@ -2,9 +2,8 @@
 
 A comprehensive Bash script for auditing the security and performance of your VPS (Virtual Private Server). This tool performs various security checks and provides a detailed report with recommendations for improvements.
 
-<!-- add a screenshot of the output here -->
+![Sample Output](./docs/screenshot.png)
 
-![Sample Output](./screenshot.png)
 ## Features
 
 ### Security Checks
@@ -49,44 +48,92 @@ A comprehensive Bash script for auditing the security and performance of your VP
 
 ## Installation
 
-1. Download the script:
+> Because this script runs as **root**, install it from a **tagged release and
+> verify the checksum** before running. Do not pipe an unpinned script from
+> `main` straight into a root shell.
+
+### Recommended: install a verified release
+
+1. Pick the version you want to install:
+
+   ```bash
+   VERSION=v2.1.0
+   ```
+
+2. Download the script and its checksum file from that release:
+
+   ```bash
+   curl -fsSLO "https://github.com/mylesagnew/vps-audit/releases/download/${VERSION}/vps-audit.sh"
+   curl -fsSLO "https://github.com/mylesagnew/vps-audit/releases/download/${VERSION}/SHA256SUMS"
+   ```
+
+3. Verify the download matches the published checksum (this must print `OK`):
+
+   ```bash
+   sha256sum -c SHA256SUMS --ignore-missing
+   ```
+
+4. Make it executable:
+
+   ```bash
+   chmod +x vps-audit.sh
+   ```
+
+### Alternative: clone the repository
+
+For development or the latest unreleased code:
 
 ```bash
-wget https://raw.githubusercontent.com/mylesagnew/vps-audit/main/vps-audit.sh
-# or
-curl -O https://raw.githubusercontent.com/mylesagnew/vps-audit/main/vps-audit.sh
+git clone https://github.com/mylesagnew/vps-audit.git
+cd vps-audit
+chmod +x scripts/vps-audit.sh
 ```
 
-2. Make the script executable:
-
-```bash
-chmod +x vps-audit.sh
-```
+The script lives at `scripts/vps-audit.sh` in the repository. The examples below
+assume the release layout (`./vps-audit.sh`); adjust the path if you cloned.
 
 ## Usage
 
-Run the script with sudo privileges:
+1. Run the script with root privileges:
+
+   ```bash
+   sudo ./vps-audit.sh
+   ```
+
+2. Read the real-time, colour-coded results in your terminal:
+   - 🟢 `[PASS]` — check passed
+   - 🟡 `[WARN]` — potential issue, review it
+   - 🔴 `[FAIL]` — critical issue, fix it
+
+3. Review the saved report. By default it is written to
+   `vps-audit-report-<TIMESTAMP>.txt` in the current directory with `chmod 600`
+   permissions. (`--output` refuses to follow symlinks or overwrite an existing
+   file.)
+
+### Common invocations
 
 ```bash
+# Standard audit (human-readable report):
 sudo ./vps-audit.sh
+
+# Skip the external public-IP lookup (fully offline):
+sudo ./vps-audit.sh --no-public-ip
+
+# Machine-readable output for automation:
+sudo ./vps-audit.sh --json > audit.json
+
+# Write the report to a specific path:
+sudo ./vps-audit.sh -o /var/log/vps-audit.txt
 ```
-
-The script will:
-
-1. Perform all security checks
-2. Display results in real-time with color coding:
-   - 🟢 [PASS] - Check passed successfully
-   - 🟡 [WARN] - Potential issues detected
-   - 🔴 [FAIL] - Critical issues found
-3. Generate a detailed report file: `vps-audit-report-[TIMESTAMP].txt` (created with `chmod 600`)
 
 ### Options
 
 | Option | Description |
 |--------|-------------|
-| `--json` | Emit machine-readable JSON to stdout (suppresses the coloured UI). |
+| `--json` | Emit machine-readable JSON to stdout (suppresses the coloured UI). Validates against [`docs/vps-audit.schema.json`](docs/vps-audit.schema.json). |
 | `--strict` | Exit non-zero on `WARN` as well as `FAIL`. |
-| `-o, --output FILE` | Write the text report to `FILE` instead of the default timestamped name. |
+| `--no-public-ip` | Skip the external public-IP lookup (`api.ipify.org`). |
+| `-o, --output FILE` | Write the report to `FILE`. Refuses symlinks and will not overwrite an existing file. |
 | `-h, --help` | Show help and exit. |
 
 ### Exit codes (for CI/CD gating)
@@ -95,9 +142,9 @@ The script will:
 |------|---------|
 | `0` | No `FAIL` findings (and, unless `--strict`, `WARN` is allowed). |
 | `1` | One or more `FAIL` findings (or any `WARN` under `--strict`). |
-| `2` | Usage error (unknown flag / missing argument). |
+| `2` | Usage error (unknown flag / missing argument / unsafe `--output`). |
 
-Example pipeline step that fails the build on any FAIL or WARN:
+Example pipeline step that fails the build on any `FAIL` or `WARN`:
 
 ```bash
 sudo ./vps-audit.sh --json --strict > audit.json
@@ -172,9 +219,44 @@ You can modify the thresholds by editing the following variables in the script:
 - Some checks may need customization for specific environments
 - Not a replacement for professional security audit
 
+## Development
+
+The repository is laid out as:
+
+```
+.
+├── scripts/vps-audit.sh          # the audit script
+├── tests/bats/                   # Bats test suite
+├── docs/                         # screenshot, sample report, JSON schema
+└── .github/workflows/lint.yml    # ShellCheck + shfmt + Bats CI
+```
+
+To run the checks locally:
+
+1. Install the tooling:
+
+   ```bash
+   sudo apt-get install -y shellcheck bats
+   # shfmt: https://github.com/mvdan/sh/releases
+   ```
+
+2. Lint and format-check the script:
+
+   ```bash
+   shellcheck -S style scripts/vps-audit.sh
+   shfmt -d -i 4 -ci -bn scripts/vps-audit.sh
+   ```
+
+3. Run the test suite:
+
+   ```bash
+   bats tests/bats
+   ```
+
 ## Contributing
 
-Feel free to submit issues and enhancement requests!
+Feel free to submit issues and enhancement requests! Please run the checks in
+[Development](#development) before opening a pull request.
 
 ## License
 

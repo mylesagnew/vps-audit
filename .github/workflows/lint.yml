@@ -9,57 +9,98 @@ on:
 permissions:
   contents: read
 
+env:
+  SCRIPT: scripts/vps-audit.sh
+
 jobs:
   shellcheck:
     name: ShellCheck
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
+      # ludeeus/action-shellcheck 2.0.0
       - name: Run ShellCheck
-        uses: ludeeus/action-shellcheck@master
+        uses: ludeeus/action-shellcheck@00cae500b08a931fb5698e11e79bfbd38e612a38
         with:
           severity: style
-          scandir: .
-          additional_files: vps-audit.sh
+          scandir: scripts
 
   shfmt:
     name: shfmt (formatting)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    env:
+      SHFMT_VERSION: v3.10.0
+      SHFMT_SHA256: 1f57a384d59542f8fac5f503da1f3ea44242f46dff969569e80b524d64b71dbc
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
-      - name: Install shfmt
+      - name: Install shfmt (checksum-verified)
         run: |
-          curl -fsSL -o /usr/local/bin/shfmt \
-            https://github.com/mvdan/sh/releases/download/v3.10.0/shfmt_v3.10.0_linux_amd64
-          chmod +x /usr/local/bin/shfmt
+          curl -fsSL -o /tmp/shfmt \
+            "https://github.com/mvdan/sh/releases/download/${SHFMT_VERSION}/shfmt_${SHFMT_VERSION}_linux_amd64"
+          echo "${SHFMT_SHA256}  /tmp/shfmt" | sha256sum -c -
+          install -m 0755 /tmp/shfmt /usr/local/bin/shfmt
           shfmt --version
 
       - name: Check formatting (4-space indent, matches existing style)
-        run: shfmt -d -i 4 -ci -bn .
+        run: shfmt -d -i 4 -ci -bn "$SCRIPT"
+
+  actionlint:
+    name: actionlint (workflow lint)
+    runs-on: ubuntu-24.04
+    env:
+      ACTIONLINT_VERSION: 1.7.12
+      ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Install actionlint (checksum-verified)
+        run: |
+          curl -fsSL -o /tmp/actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  /tmp/actionlint.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/actionlint.tar.gz -C /tmp actionlint
+          install -m 0755 /tmp/actionlint /usr/local/bin/actionlint
+          actionlint --version
+
+      - name: Run actionlint
+        run: actionlint -color
+
+  bats:
+    name: Bats tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Install bats
+        run: sudo apt-get update && sudo apt-get install -y bats
+
+      - name: Run bats
+        run: bats tests/bats
 
   smoke:
     name: Smoke test (parse + arg handling)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
       - name: bash -n syntax check
-        run: bash -n vps-audit.sh
+        run: bash -n "$SCRIPT"
 
       - name: --help exits 0
-        run: bash vps-audit.sh --help
+        run: bash "$SCRIPT" --help
 
       - name: unknown flag exits 2
         run: |
           set +e
-          bash vps-audit.sh --definitely-not-a-flag >/dev/null 2>&1
+          bash "$SCRIPT" --definitely-not-a-flag >/dev/null 2>&1
           rc=$?
           set -e
           test "$rc" -eq 2 || { echo "expected exit 2, got $rc"; exit 1; }
 
       - name: --json produces valid JSON
         run: |
-          bash vps-audit.sh --json > out.json 2>/dev/null || true
+          bash "$SCRIPT" --json --no-public-ip > out.json 2>/dev/null || true
           python3 -c "import json,sys; d=json.load(open('out.json')); assert 'results' in d and 'summary' in d, d.keys(); print('valid JSON, keys:', list(d.keys()))"
