@@ -60,5 +60,10 @@ jobs:
             [ "$rc" -le 1 ] || fail "baseline run crashed (rc=$rc)"
             grep -q "\"drift\"" /tmp/d.json || fail "no drift key with --baseline"
 
+            # Remediation DRY-RUN must never modify the system (no --remediate-apply).
+            rc=0; bash scripts/vps-audit.sh --json --no-public-ip --remediate >/dev/null 2>/tmp/rem.log || rc=$?
+            [ "$rc" -le 1 ] || fail "remediate dry-run crashed (rc=$rc)"
+            grep -q "DRY-RUN" /tmp/rem.log || fail "remediate did not announce DRY-RUN"
+
             echo "OK: '"$IMAGE"'"
           '

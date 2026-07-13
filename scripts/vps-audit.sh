@@ -24,10 +24,11 @@
 #      port + SUID parsers extracted into unit-testable functions
 #  #16 Markdown/HTML reports; per-check CIS mapping + evidence in JSON
 #  #17 Baseline drift mode (--baseline/--fail-on-drift); multi-distro CI matrix
+#  #18 Opt-in webhook output; gated, dry-run-by-default auto-remediation
 #
 
 # Tool identity (COMMIT is stamped in released artifacts by the release workflow)
-VPS_AUDIT_VERSION="3.5.0"
+VPS_AUDIT_VERSION="3.6.0"
 VPS_AUDIT_COMMIT="unknown"
 
 # ===========================================================================
@@ -593,6 +594,123 @@ count_unowned() {
     printf '%s|%s\n' "$n" "$list"
 }
 
+# --- webhook (opt-in; posts findings to a user-supplied endpoint) ---------
+
+# webhook_payload: compact JSON with summary + WARN/FAIL findings ONLY.
+#   Deliberately excludes evidence, remediation, public IP, ports, and SUID paths
+#   to limit what leaves the host. hostname is included so the host is identifiable.
+webhook_payload() {
+    local i first=1
+    printf '{"tool":{"name":"vps-audit","version":"%s"},"hostname":"%s","timestamp":"%s",' \
+        "$(json_escape "$VPS_AUDIT_VERSION")" "$(json_escape "$(hostname)")" "$TIMESTAMP"
+    printf '"summary":{"pass":%d,"warn":%d,"fail":%d,"not_applicable":%d},"findings":[' \
+        "$PASS_COUNT" "$WARN_COUNT" "$FAIL_COUNT" "$NA_COUNT"
+    for i in "${!R_ID[@]}"; do
+        case "${R_STATUS[$i]}" in WARN | FAIL) ;; *) continue ;; esac
+        [ "$first" -eq 1 ] || printf ','
+        printf '{"id":"%s","status":"%s","severity":"%s","message":"%s"}' \
+            "$(json_escape "${R_ID[$i]}")" "${R_STATUS[$i]}" \
+            "$(json_escape "${R_SEV[$i]}")" "$(json_escape "${R_MSG[$i]}")"
+        first=0
+    done
+    printf ']}'
+}
+
+# send_webhook URL: POST the payload. Honours --webhook-on fail. Logs to stderr;
+# never affects the audit's stdout or exit code.
+send_webhook() {
+    local url="$1" code
+    command -v curl >/dev/null 2>&1 || {
+        echo "[webhook] curl not available; skipping" >&2
+        return 0
+    }
+    if [ "$WEBHOOK_ON" = fail ] && [ "$FAIL_COUNT" -eq 0 ]; then
+        echo "[webhook] no FAIL findings; skipping (--webhook-on fail)" >&2
+        return 0
+    fi
+    code=$(webhook_payload | curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+        -X POST -H 'content-type: application/json' --data @- "$url" 2>/dev/null || echo "000")
+    echo "[webhook] POST -> HTTP $code" >&2
+}
+
+# --- gated remediation (opt-in; dry-run by default; apply only as root) ----
+
+# remediation_for ID [SSH_PORT] -> "description|command" for the allowlisted,
+#   reversible fixes, or empty if the check has no auto-remediation. Pure.
+remediation_for() {
+    local id="$1" ssh_port="${2:-22}"
+    case "$id" in
+        ssh-root-login) echo "Set 'PermitRootLogin no' in sshd_config (backup + validate + reload)|harden_sshd permitrootlogin no" ;;
+        ssh-password-auth) echo "Set 'PasswordAuthentication no' in sshd_config (backup + validate + reload)|harden_sshd passwordauthentication no" ;;
+        firewall) echo "Allow SSH $ssh_port then enable ufw|enable_ufw $ssh_port" ;;
+        unattended-upgrades) echo "Install unattended-upgrades|install_pkg unattended-upgrades" ;;
+        *) echo "" ;;
+    esac
+}
+
+# harden_sshd DIRECTIVE VALUE: back up sshd_config, set the directive, validate
+# with `sshd -t`, and reload. Aborts (leaving the backup) if validation fails.
+harden_sshd() {
+    local key="$1" val="$2" cfg=/etc/ssh/sshd_config bak
+    bak="${cfg}.vps-audit.bak.$(date +%s)"
+    cp -a "$cfg" "$bak" || return 1
+    if grep -qiE "^[[:space:]]*${key}([[:space:]]|$)" "$cfg"; then
+        sed -i -E "s|^[[:space:]]*${key}[[:space:]].*|${key} ${val}|I" "$cfg"
+    else
+        printf '\n%s %s\n' "$key" "$val" >>"$cfg"
+    fi
+    if ! sshd -t 2>/dev/null; then
+        echo "[remediation] sshd config test FAILED; restoring $bak" >&2
+        cp -a "$bak" "$cfg"
+        return 1
+    fi
+    systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null \
+        || service ssh reload 2>/dev/null || true
+    echo "[remediation] sshd hardened ($key $val); backup at $bak" >&2
+}
+
+# enable_ufw SSH_PORT: allow SSH FIRST (so we cannot lock ourselves out), then
+# enable the firewall.
+enable_ufw() {
+    local port="${1:-22}"
+    ufw allow "${port}/tcp" >/dev/null 2>&1 || true
+    ufw --force enable
+}
+
+install_pkg() {
+    apt-get update >/dev/null 2>&1 && apt-get install -y "$1"
+}
+
+# run_remediation APPLY: iterate FAILed, allowlisted checks. Dry-run prints the
+# plan; apply (root only) executes it. Logs to stderr; does not touch stdout.
+run_remediation() {
+    local apply="$1" i id st plan desc cmd n=0
+    printf '\n[remediation] %s\n' "$([ "$apply" = true ] && echo 'APPLY mode — modifying the system' || echo 'DRY-RUN — no changes will be made')" >&2
+    if [ "$apply" = true ] && [ "$(id -u)" -ne 0 ]; then
+        echo "[remediation] must run as root to apply; refusing" >&2
+        return 1
+    fi
+    for i in "${!R_ID[@]}"; do
+        id=${R_ID[$i]}
+        st=${R_STATUS[$i]}
+        [ "$st" = FAIL ] || continue
+        [ -n "$REMEDIATE_ONLY" ] && ! in_list "$id" "$REMEDIATE_ONLY" && continue
+        plan=$(remediation_for "$id" "${SSH_PORT:-22}")
+        [ -z "$plan" ] && continue
+        desc=${plan%%|*}
+        cmd=${plan#*|}
+        n=$((n + 1))
+        if [ "$apply" = true ]; then
+            printf '[remediation] fixing %s: %s\n' "$id" "$desc" >&2
+            $cmd >&2 || echo "[remediation] FAILED for $id" >&2
+        else
+            printf '[remediation] would fix %s: %s\n' "$id" "$desc" >&2
+        fi
+    done
+    [ "$n" -eq 0 ] && echo "[remediation] nothing to remediate" >&2
+    return 0
+}
+
 # --- baseline / drift (compare against a prior --json/--jsonl run) --------
 
 # status_rank STATUS -> 0 (PASS/NA, non-finding) | 1 (WARN) | 2 (FAIL)
@@ -691,6 +809,11 @@ Options:
   --fail-on ID[,ID] Force non-zero exit if these ids FAIL or WARN (repeatable)
   --baseline FILE   Compare against a prior --json/--jsonl run and report drift
   --fail-on-drift   Exit non-zero if any check regressed vs the baseline
+  --webhook URL     POST findings (summary + WARN/FAIL only) to URL on completion
+  --webhook-on WHEN 'always' (default) or 'fail' (only when there are FAILs)
+  --remediate       Show the remediation plan for failed checks (DRY-RUN; safe)
+  --remediate-apply Actually apply the allowlisted fixes (root only; makes changes)
+  --remediate-only ID[,ID]  Limit remediation to these check ids (repeatable)
   --public-ip       Enable the external public-IP lookup (api.ipify.org).
                     Off by default: no external calls are made unless requested.
   --no-public-ip    Explicitly disable the public-IP lookup (default; kept for
@@ -731,6 +854,9 @@ main() {
     BASELINE_FILE="" # prior --json/--jsonl run to compare against (drift mode)
     FAIL_ON_DRIFT=false
     DRIFT_REG=() DRIFT_IMP=() DRIFT_NEW=() DRIFT_REM=()
+    WEBHOOK_URL=""      # opt-in: POST findings here on completion
+    WEBHOOK_ON="always" # always | fail
+    REMEDIATE=false REMEDIATE_APPLY=false REMEDIATE_ONLY=""
     # Off by default (no external calls) for compliance-sensitive environments;
     # enable with --public-ip. --no-public-ip is kept for backward compatibility.
     PUBLIC_IP_LOOKUP=false
@@ -777,6 +903,38 @@ main() {
                 BASELINE_FILE="$1"
                 ;;
             --fail-on-drift) FAIL_ON_DRIFT=true ;;
+            --webhook)
+                shift
+                [ $# -gt 0 ] || {
+                    echo "error: --webhook needs a URL" >&2
+                    exit 2
+                }
+                WEBHOOK_URL="$1"
+                ;;
+            --webhook-on)
+                shift
+                case "${1:-}" in
+                    always | fail) WEBHOOK_ON="$1" ;;
+                    *)
+                        echo "error: --webhook-on must be 'always' or 'fail'" >&2
+                        exit 2
+                        ;;
+                esac
+                ;;
+            --remediate) REMEDIATE=true ;;
+            --remediate-apply)
+                REMEDIATE=true
+                REMEDIATE_APPLY=true
+                ;;
+            --remediate-only)
+                shift
+                [ $# -gt 0 ] || {
+                    echo "error: --remediate-only needs an argument" >&2
+                    exit 2
+                }
+                REMEDIATE=true
+                REMEDIATE_ONLY="$REMEDIATE_ONLY ${1//,/ }"
+                ;;
             --fail-on)
                 shift
                 [ $# -gt 0 ] || {
@@ -1157,6 +1315,10 @@ main() {
             say "VPS audit complete. Full report saved to $REPORT_FILE"
             ;;
     esac
+
+    # Side channels (opt-in). These log to stderr and never change stdout output.
+    [ -n "$WEBHOOK_URL" ] && send_webhook "$WEBHOOK_URL"
+    $REMEDIATE && run_remediation "$REMEDIATE_APPLY"
 
     exit "$exit_code"
 }

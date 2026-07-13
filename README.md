@@ -226,6 +226,46 @@ Each check is compared by its stable `id`. The output gains a `drift` object wit
 and `removed` (ids gone since). The baseline can be a prior `--json` or `--jsonl`
 file. Drift is also shown in the text and Markdown reports.
 
+### Webhook (opt-in)
+
+Send findings to a URL you control on completion:
+
+```bash
+sudo ./vps-audit.sh --webhook https://example.com/hook          # send every run
+sudo ./vps-audit.sh --webhook https://example.com/hook --webhook-on fail   # only on FAILs
+```
+
+The POST body is deliberately minimal — `tool`, `hostname`, `summary`, and the
+**WARN/FAIL findings only** (`id`, `status`, `severity`, `message`). It
+intentionally **omits** the `evidence` strings, public IP, port lists, and SUID
+paths so the least data leaves the host. It fires only when you pass `--webhook`,
+logs the HTTP status to stderr, and never affects the audit's stdout or exit code.
+
+### Remediation (opt-in, gated)
+
+> ⚠️ **This modifies the system and runs as root.** It is **off by default** and
+> **dry-run by default**.
+
+```bash
+sudo ./vps-audit.sh --remediate          # DRY-RUN: prints the plan, changes nothing
+sudo ./vps-audit.sh --remediate-apply    # actually applies the allowlisted fixes (root)
+sudo ./vps-audit.sh --remediate-apply --remediate-only ssh-root-login
+```
+
+Only a small allowlist of **reversible hardening fixes** is supported, and only
+for checks that are `FAIL`:
+
+| Check id | Fix | Safeguards |
+|----------|-----|-----------|
+| `ssh-root-login` | `PermitRootLogin no` | backs up `sshd_config`, validates with `sshd -t`, reloads |
+| `ssh-password-auth` | `PasswordAuthentication no` | same |
+| `firewall` | enable `ufw` | **allows the current SSH port first** so you aren't locked out |
+| `unattended-upgrades` | install the package | apt only |
+
+Applying requires `--remediate-apply` **and** running as root; otherwise it
+refuses. Remediation does not re-audit — run again to confirm the result. All
+remediation activity is logged to stderr, separate from the report on stdout.
+
 ### Policy files
 
 Thresholds (failed logins, running services, public ports, disk/mem/cpu) can be
