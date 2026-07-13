@@ -80,6 +80,29 @@ for res in run["results"]:
 PY
 }
 
+@test "--baseline adds a drift object; self-compare shows no regressions" {
+    run bash "$SCRIPT" --json --no-public-ip
+    [ "$status" -le 1 ]
+    base="$TMP/base.json"
+    printf '%s' "$output" > "$base"
+    run bash "$SCRIPT" --json --no-public-ip --baseline "$base"
+    [ "$status" -le 1 ]
+    python3 - "$output" <<'PY'
+import json, sys
+d = json.loads(sys.argv[1])
+assert "drift" in d, "no drift object"
+assert d["drift"]["regressed"] == [], d["drift"]["regressed"]
+for k in ("regressed", "improved", "new", "removed", "baseline"):
+    assert k in d["drift"], k
+PY
+}
+
+@test "--baseline with a missing file exits 2" {
+    run bash "$SCRIPT" --json --no-public-ip --baseline /no/such/baseline.json
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"baseline"* ]]
+}
+
 @test "--ignore removes a check from the exit gate" {
     # ssh-config or firewall may FAIL in CI; ignore every id that can fail so the
     # gate is satisfied regardless of host state, proving --ignore is honoured.

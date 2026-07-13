@@ -1,0 +1,64 @@
+name: Container tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  distro-matrix:
+    name: Audit on ${{ matrix.image }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: ubuntu:24.04
+            setup: apt-get update && apt-get install -y --no-install-recommends iproute2 procps hostname
+          - image: debian:12
+            setup: apt-get update && apt-get install -y --no-install-recommends iproute2 procps hostname
+          - image: rockylinux:9
+            setup: dnf install -y iproute procps-ng hostname
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Run the full audit in a real ${{ matrix.image }} container
+        env:
+          IMAGE: ${{ matrix.image }}
+          SETUP: ${{ matrix.setup }}
+        run: |
+          set -euo pipefail
+          docker run --rm -e SETUP -v "$PWD:/work" -w /work "$IMAGE" bash -c '
+            set -u
+            eval "${SETUP:-true}" >/dev/null 2>&1 || echo "warning: dependency install failed; testing degraded host"
+            fail() { echo "FAIL: $1" >&2; exit 1; }
+
+            # Default text run must not crash (exit 0/1 only).
+            rc=0; bash scripts/vps-audit.sh --no-public-ip >/dev/null 2>&1 || rc=$?
+            [ "$rc" -le 1 ] || fail "text run crashed (rc=$rc)"
+
+            # JSON must be well-formed and contain results.
+            rc=0; bash scripts/vps-audit.sh --json --no-public-ip >/tmp/o.json 2>/dev/null || rc=$?
+            [ "$rc" -le 1 ] || fail "json run crashed (rc=$rc)"
+            head -c1 /tmp/o.json | grep -q "{" || { cat /tmp/o.json; fail "not JSON"; }
+            grep -q "\"results\"" /tmp/o.json || fail "no results key"
+            grep -q "\"tool\"" /tmp/o.json || fail "no tool key"
+
+            # Other formats must not crash.
+            for m in --jsonl --sarif --markdown --html; do
+              rc=0; bash scripts/vps-audit.sh $m --no-public-ip >/dev/null 2>&1 || rc=$?
+              [ "$rc" -le 1 ] || fail "$m crashed (rc=$rc)"
+            done
+
+            # Baseline drift against the JSON we just produced (self-compare = no drift).
+            rc=0; bash scripts/vps-audit.sh --json --no-public-ip --baseline /tmp/o.json >/tmp/d.json 2>/dev/null || rc=$?
+            [ "$rc" -le 1 ] || fail "baseline run crashed (rc=$rc)"
+            grep -q "\"drift\"" /tmp/d.json || fail "no drift key with --baseline"
+
+            echo "OK: '"$IMAGE"'"
+          '

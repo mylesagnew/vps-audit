@@ -6,6 +6,18 @@
   "type": "object",
   "additionalProperties": false,
   "required": ["tool", "timestamp", "hostname", "summary", "exit_code", "results"],
+  "$defs": {
+    "transition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "from", "to"],
+      "properties": {
+        "id": { "type": "string" },
+        "from": { "type": "string", "enum": ["PASS", "WARN", "FAIL", "NA"] },
+        "to": { "type": "string", "enum": ["PASS", "WARN", "FAIL", "NA"] }
+      }
+    }
+  },
   "properties": {
     "tool": {
       "type": "object",
@@ -41,6 +53,27 @@
       "type": "integer",
       "enum": [0, 1],
       "description": "0 = no FAIL (and no WARN under --strict); 1 = findings. NA never affects the exit code."
+    },
+    "drift": {
+      "type": "object",
+      "description": "Present only with --baseline: change vs a prior run, by check id",
+      "additionalProperties": false,
+      "required": ["baseline", "regressed", "improved", "new", "removed"],
+      "properties": {
+        "baseline": { "type": "string", "description": "Path of the baseline file compared against" },
+        "regressed": { "type": "array", "items": { "$ref": "#/$defs/transition" } },
+        "improved": { "type": "array", "items": { "$ref": "#/$defs/transition" } },
+        "new": { "type": "array", "items": { "type": "string" }, "description": "Check ids not present in the baseline" },
+        "removed": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "from"],
+            "properties": { "id": { "type": "string" }, "from": { "type": "string" } }
+          }
+        }
+      }
     },
     "results": {
       "type": "array",

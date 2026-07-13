@@ -23,10 +23,11 @@
 #  #15 JSONL and SARIF output modes; --ignore/--fail-on policy exceptions;
 #      port + SUID parsers extracted into unit-testable functions
 #  #16 Markdown/HTML reports; per-check CIS mapping + evidence in JSON
+#  #17 Baseline drift mode (--baseline/--fail-on-drift); multi-distro CI matrix
 #
 
 # Tool identity (COMMIT is stamped in released artifacts by the release workflow)
-VPS_AUDIT_VERSION="3.4.0"
+VPS_AUDIT_VERSION="3.5.0"
 VPS_AUDIT_COMMIT="unknown"
 
 # ===========================================================================
@@ -366,7 +367,7 @@ in_list() {
     case " $2 " in *" $1 "*) return 0 ;; *) return 1 ;; esac
 }
 
-# compute_exit_code -> 0/1, honouring --strict, --ignore and --fail-on.
+# compute_exit_code -> 0/1, honouring --strict, --ignore, --fail-on, --fail-on-drift.
 compute_exit_code() {
     local i id st ec=0
     for i in "${!R_ID[@]}"; do
@@ -379,6 +380,7 @@ compute_exit_code() {
             case "$st" in FAIL | WARN) ec=1 ;; esac
         fi
     done
+    if $FAIL_ON_DRIFT && [ "${#DRIFT_REG[@]}" -gt 0 ]; then ec=1; fi
     echo "$ec"
 }
 
@@ -403,6 +405,7 @@ emit_json() {
     printf '  "summary": { "pass": %d, "warn": %d, "fail": %d, "not_applicable": %d },\n' \
         "$PASS_COUNT" "$WARN_COUNT" "$FAIL_COUNT" "$NA_COUNT"
     printf '  "exit_code": %d,\n' "$exit_code"
+    [ -n "$BASELINE_FILE" ] && printf '  "drift": %s,\n' "$(drift_json)"
     printf '  "results": [\n'
     for i in "${!R_ID[@]}"; do
         sep=","
@@ -423,6 +426,7 @@ emit_jsonl() {
 }
 
 # Markdown report (human-friendly, shareable).
+# shellcheck disable=SC2016  # backticks in printf format strings are literal Markdown
 emit_markdown() {
     local i cis
     printf '# VPS Security Audit\n\n'
@@ -442,6 +446,20 @@ emit_markdown() {
             "$(md_escape "${R_REM[$i]}")"
     done
     printf '\n'
+    if [ -n "$BASELINE_FILE" ]; then
+        local e
+        printf '## Drift vs baseline\n\n'
+        printf -- '- Baseline: `%s`\n' "$(md_escape "$BASELINE_FILE")"
+        printf -- '- Regressed: %d · Improved: %d · New: %d · Removed: %d\n\n' \
+            "${#DRIFT_REG[@]}" "${#DRIFT_IMP[@]}" "${#DRIFT_NEW[@]}" "${#DRIFT_REM[@]}"
+        for e in ${DRIFT_REG[@]+"${DRIFT_REG[@]}"}; do
+            printf -- '- ⬆️ **regressed** `%s`: %s\n' "${e%%|*}" "$(md_escape "${e#*|}")"
+        done
+        for e in ${DRIFT_IMP[@]+"${DRIFT_IMP[@]}"}; do
+            printf -- '- ⬇️ improved `%s`: %s\n' "${e%%|*}" "$(md_escape "${e#*|}")"
+        done
+        printf '\n'
+    fi
 }
 
 # Self-contained HTML report (inline CSS; no external assets).
@@ -575,6 +593,87 @@ count_unowned() {
     printf '%s|%s\n' "$n" "$list"
 }
 
+# --- baseline / drift (compare against a prior --json/--jsonl run) --------
+
+# status_rank STATUS -> 0 (PASS/NA, non-finding) | 1 (WARN) | 2 (FAIL)
+status_rank() {
+    case "$1" in
+        FAIL) echo 2 ;;
+        WARN) echo 1 ;;
+        *) echo 0 ;;
+    esac
+}
+
+# baseline_status FILE ID -> the recorded status of ID (empty if absent)
+baseline_status() {
+    grep -oE "\"id\":\"$2\",\"test\":\"[^\"]*\",\"status\":\"[A-Z]+\"" "$1" 2>/dev/null \
+        | head -1 | sed -E 's/.*"status":"([A-Z]+)".*/\1/'
+}
+
+# baseline_ids FILE -> unique check ids present in the baseline
+baseline_ids() {
+    grep -oE '"id":"[a-z0-9-]+"' "$1" 2>/dev/null \
+        | sed -E 's/"id":"([a-z0-9-]+)"/\1/' | sort -u
+}
+
+# compute_drift: fill DRIFT_REG/IMP/NEW/REM by comparing R_* to BASELINE_FILE.
+#   Entry formats: REG/IMP "id|from|to", NEW "id", REM "id|from".
+compute_drift() {
+    DRIFT_REG=() DRIFT_IMP=() DRIFT_NEW=() DRIFT_REM=()
+    local i id cur base rc rb bid
+    for i in "${!R_ID[@]}"; do
+        id=${R_ID[$i]}
+        cur=${R_STATUS[$i]}
+        base=$(baseline_status "$BASELINE_FILE" "$id")
+        if [ -z "$base" ]; then
+            DRIFT_NEW+=("$id")
+            continue
+        fi
+        rc=$(status_rank "$cur")
+        rb=$(status_rank "$base")
+        if [ "$rc" -gt "$rb" ]; then
+            DRIFT_REG+=("$id|$base|$cur")
+        elif [ "$rc" -lt "$rb" ]; then
+            DRIFT_IMP+=("$id|$base|$cur")
+        fi
+    done
+    while IFS= read -r bid; do
+        [ -z "$bid" ] && continue
+        in_list "$bid" "${R_ID[*]}" || DRIFT_REM+=("$bid|$(baseline_status "$BASELINE_FILE" "$bid")")
+    done < <(baseline_ids "$BASELINE_FILE")
+}
+
+# drift_json: the "drift" object value (regressed/improved/new/removed).
+drift_json() {
+    local e id from to first
+    printf '{ "baseline": "%s", "regressed": [' "$(json_escape "$BASELINE_FILE")"
+    first=1
+    for e in ${DRIFT_REG[@]+"${DRIFT_REG[@]}"}; do
+        id=${e%%|*} from=${e#*|} from=${from%%|*} to=${e##*|}
+        [ "$first" -eq 1 ] || printf ','
+        printf '{"id":"%s","from":"%s","to":"%s"}' "$id" "$from" "$to"
+        first=0
+    done
+    printf '], "improved": ['
+    first=1
+    for e in ${DRIFT_IMP[@]+"${DRIFT_IMP[@]}"}; do
+        id=${e%%|*} from=${e#*|} from=${from%%|*} to=${e##*|}
+        [ "$first" -eq 1 ] || printf ','
+        printf '{"id":"%s","from":"%s","to":"%s"}' "$id" "$from" "$to"
+        first=0
+    done
+    printf '], "new": %s, "removed": [' \
+        "$(json_array_from_list "${DRIFT_NEW[*]+${DRIFT_NEW[*]}}")"
+    first=1
+    for e in ${DRIFT_REM[@]+"${DRIFT_REM[@]}"}; do
+        id=${e%%|*} from=${e##*|}
+        [ "$first" -eq 1 ] || printf ','
+        printf '{"id":"%s","from":"%s"}' "$id" "$from"
+        first=0
+    done
+    printf '] }'
+}
+
 usage() {
     cat <<'EOF'
 VPS Security Audit Tool
@@ -590,6 +689,8 @@ Options:
   --strict          Exit non-zero on WARN as well as FAIL (default: FAIL only)
   --ignore ID[,ID]  Exclude these check ids from the exit code (repeatable)
   --fail-on ID[,ID] Force non-zero exit if these ids FAIL or WARN (repeatable)
+  --baseline FILE   Compare against a prior --json/--jsonl run and report drift
+  --fail-on-drift   Exit non-zero if any check regressed vs the baseline
   --public-ip       Enable the external public-IP lookup (api.ipify.org).
                     Off by default: no external calls are made unless requested.
   --no-public-ip    Explicitly disable the public-IP lookup (default; kept for
@@ -625,8 +726,11 @@ main() {
     OUTPUT_MODE=text # text | json | jsonl | sarif
     JSON_OUTPUT=false
     STRICT=false
-    IGNORE_IDS="" # space-delimited check ids excluded from the exit code
-    FAILON_IDS="" # space-delimited check ids that hard-gate the exit code
+    IGNORE_IDS=""    # space-delimited check ids excluded from the exit code
+    FAILON_IDS=""    # space-delimited check ids that hard-gate the exit code
+    BASELINE_FILE="" # prior --json/--jsonl run to compare against (drift mode)
+    FAIL_ON_DRIFT=false
+    DRIFT_REG=() DRIFT_IMP=() DRIFT_NEW=() DRIFT_REM=()
     # Off by default (no external calls) for compliance-sensitive environments;
     # enable with --public-ip. --no-public-ip is kept for backward compatibility.
     PUBLIC_IP_LOOKUP=false
@@ -664,6 +768,15 @@ main() {
                 }
                 IGNORE_IDS="$IGNORE_IDS ${1//,/ }"
                 ;;
+            --baseline)
+                shift
+                [ $# -gt 0 ] || {
+                    echo "error: --baseline needs an argument" >&2
+                    exit 2
+                }
+                BASELINE_FILE="$1"
+                ;;
+            --fail-on-drift) FAIL_ON_DRIFT=true ;;
             --fail-on)
                 shift
                 [ $# -gt 0 ] || {
@@ -1021,6 +1134,14 @@ main() {
     } >&3
     exec 3>&-
 
+    if [ -n "$BASELINE_FILE" ]; then
+        if [ ! -r "$BASELINE_FILE" ]; then
+            echo "error: cannot read baseline file: $BASELINE_FILE" >&2
+            exit 2
+        fi
+        compute_drift
+    fi
+
     local exit_code
     exit_code=$(compute_exit_code)
 
@@ -1032,11 +1153,24 @@ main() {
         html) emit_html ;;
         *)
             say "\n${BOLD}Summary:${NC} ${GREEN}PASS=$PASS_COUNT${NC} ${YELLOW}WARN=$WARN_COUNT${NC} ${RED}FAIL=$FAIL_COUNT${NC} ${GRAY}NA=$NA_COUNT${NC}"
+            [ -n "$BASELINE_FILE" ] && say_drift
             say "VPS audit complete. Full report saved to $REPORT_FILE"
             ;;
     esac
 
     exit "$exit_code"
+}
+
+# say_drift: human console drift summary (text mode).
+say_drift() {
+    local e
+    say "${BOLD}Drift vs baseline${NC} ${GRAY}($BASELINE_FILE)${NC}: ${RED}regressed=${#DRIFT_REG[@]}${NC} ${GREEN}improved=${#DRIFT_IMP[@]}${NC} new=${#DRIFT_NEW[@]} removed=${#DRIFT_REM[@]}"
+    for e in ${DRIFT_REG[@]+"${DRIFT_REG[@]}"}; do
+        say "  ${RED}▲${NC} ${e%%|*}: ${e#*|}"
+    done
+    for e in ${DRIFT_IMP[@]+"${DRIFT_IMP[@]}"}; do
+        say "  ${GREEN}▼${NC} ${e%%|*}: ${e#*|}"
+    done
 }
 
 # sshd_get DIRECTIVE — first value of an effective sshd directive (lowercase key)
