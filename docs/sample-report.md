@@ -41,14 +41,13 @@ Validates against [`vps-audit.schema.json`](vps-audit.schema.json).
   "summary": { "pass": 14, "warn": 2, "fail": 1, "not_applicable": 0 },
   "exit_code": 1,
   "results": [
-    { "id": "system-restart", "test": "System Restart", "status": "PASS", "severity": "low", "message": "No restart required", "remediation": "Reboot during a maintenance window to apply pending kernel/library updates.", "ignored": false },
-    { "id": "ssh-root-login", "test": "SSH Root Login", "status": "PASS", "severity": "high", "message": "Root login is disabled (PermitRootLogin no)", "remediation": "Set 'PermitRootLogin no' in /etc/ssh/sshd_config and reload sshd.", "ignored": false },
-    { "id": "system-updates", "test": "System Updates", "status": "FAIL", "severity": "high", "message": "2 security update(s) pending (of 5 total) - apply immediately (run 'apt update' first for accuracy)", "remediation": "Apply pending security updates: apt-get update && apt-get upgrade.", "ignored": false }
+    { "id": "ssh-root-login", "test": "SSH Root Login", "status": "PASS", "severity": "high", "message": "Root login is disabled (PermitRootLogin no)", "remediation": "Set 'PermitRootLogin no' in /etc/ssh/sshd_config and reload sshd.", "cis": ["5.2"], "evidence": "PermitRootLogin=no", "ignored": false },
+    { "id": "system-updates", "test": "System Updates", "status": "FAIL", "severity": "high", "message": "2 security update(s) pending (of 5 total) - apply immediately (run 'apt update' first for accuracy)", "remediation": "Apply pending security updates: apt-get update && apt-get upgrade.", "cis": ["1.9"], "evidence": "security=2 total=5", "ignored": false }
   ]
 }
 ```
 
-`severity` is the control's inherent risk weight (`critical`/`high`/`medium`/`low`/`info`) and is present regardless of `status` — combine the two for triage. `status` may be `NA` (not applicable to this host, e.g. apt checks on a non-Debian system); `NA` never affects `exit_code`. `ignored` is `true` for checks excluded from the exit code via `--ignore`.
+`severity` is the control's inherent risk weight (`critical`/`high`/`medium`/`low`/`info`), present regardless of `status` — combine for triage. `cis` is an array of indicative CIS Distribution Independent Linux Benchmark references (may be empty; guidance, not certified). `evidence` is the concrete observed value backing the result. `status` may be `NA` (not applicable, e.g. apt checks on a non-Debian host); `NA` never affects `exit_code`. `ignored` is `true` for checks excluded via `--ignore`. Per-check rationale: [`docs/checks.md`](checks.md).
 
 ## JSONL (`--jsonl`)
 
@@ -67,6 +66,18 @@ SARIF 2.1.0 for the GitHub code-scanning / Security tab. `FAIL`→`error`, `WARN
 sudo scripts/vps-audit.sh --sarif --no-public-ip > vps-audit.sarif
 # upload via github/codeql-action/upload-sarif in a workflow
 ```
+
+## Markdown (`--markdown`) and HTML (`--html`)
+
+Human-friendly, shareable reports rendered from the same results:
+
+```bash
+sudo scripts/vps-audit.sh --markdown > report.md
+sudo scripts/vps-audit.sh --html     > report.html   # self-contained, inline CSS
+```
+
+Both include a summary line and a table with status, severity, check, finding,
+CIS reference, and remediation.
 
 Validate locally:
 

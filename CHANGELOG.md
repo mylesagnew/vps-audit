@@ -5,6 +5,26 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.0] - 2026-07-13
+
+Reporting and compliance evidence. Additive.
+
+### Added
+- **Markdown (`--markdown`/`--md`) and HTML (`--html`) reports** rendered from the
+  same results — summary + a status/severity/check/finding/CIS/remediation table.
+  HTML is self-contained (inline CSS, no external assets) and HTML-escaped.
+- **CIS mapping**: each JSON result gains a `cis` array of *indicative* CIS
+  Distribution Independent Linux Benchmark references (guidance, not certified).
+- **Evidence field**: each result gains an `evidence` string capturing the
+  concrete observed value (e.g. `PermitRootLogin=yes`, `usage=85%`) for audit trails.
+- **`docs/checks.md`**: per-check rationale — what/why, PASS/WARN/FAIL/NA criteria,
+  severity, and CIS mapping for every check id.
+- Unit tests for `cis_for`, `json_array_from_list`, `html_escape`, and the
+  Markdown/HTML emitters.
+
+### Changed
+- Schema updated: results now require `cis` (array) and `evidence` (string).
+
 ## [3.3.0] - 2026-07-13
 
 SIEM-friendly output formats and policy exceptions. Additive.
@@ -181,6 +201,7 @@ CI/CD gate. **Breaking:** the script now exits non-zero when checks fail.
 - Corrected repository attribution (fork of `vernu/vps-audit`, maintained by
   `mylesagnew`).
 
+[3.4.0]: https://github.com/mylesagnew/vps-audit/releases/tag/v3.4.0
 [3.3.0]: https://github.com/mylesagnew/vps-audit/releases/tag/v3.3.0
 [3.2.0]: https://github.com/mylesagnew/vps-audit/releases/tag/v3.2.0
 [3.1.0]: https://github.com/mylesagnew/vps-audit/releases/tag/v3.1.0

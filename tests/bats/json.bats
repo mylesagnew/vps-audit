@@ -26,12 +26,29 @@ assert set(d["summary"]) == {"pass", "warn", "fail", "not_applicable"}, d["summa
 assert isinstance(d["results"], list) and d["results"], "results empty"
 sev = {"critical", "high", "medium", "low", "info"}
 for r in d["results"]:
-    assert set(r) == {"id", "test", "status", "severity", "message", "remediation", "ignored"}, r
+    assert set(r) == {"id", "test", "status", "severity", "message", "remediation", "cis", "evidence", "ignored"}, r
     assert r["status"] in ("PASS", "WARN", "FAIL", "NA"), r
     assert r["severity"] in sev, r
     assert isinstance(r["ignored"], bool), r
+    assert isinstance(r["cis"], list), r
+    assert isinstance(r["evidence"], str), r
     assert re.fullmatch(r"[a-z0-9-]+", r["id"]), f"bad id: {r['id']!r}"
 PY
+}
+
+@test "--markdown emits a report with a results table" {
+    run bash "$SCRIPT" --markdown --no-public-ip
+    [ "$status" -le 1 ]
+    [[ "$output" == *"# VPS Security Audit"* ]]
+    [[ "$output" == *"| Status | Severity | Check |"* ]]
+}
+
+@test "--html emits a self-contained HTML document" {
+    run bash "$SCRIPT" --html --no-public-ip
+    [ "$status" -le 1 ]
+    [[ "$output" == *"<!doctype html>"* ]]
+    [[ "$output" == *"<table>"* ]]
+    [[ "$output" != *"http://"* ]] # no external assets
 }
 
 @test "--jsonl emits one valid JSON object per line" {

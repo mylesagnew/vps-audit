@@ -149,6 +149,8 @@ sudo ./vps-audit.sh -o /var/log/vps-audit.txt
 | `--json` | Emit machine-readable JSON to stdout (suppresses the coloured UI). Validates against [`docs/vps-audit.schema.json`](docs/vps-audit.schema.json). |
 | `--jsonl` | Emit one self-contained JSON object per result line (SIEM/log pipelines). |
 | `--sarif` | Emit SARIF 2.1.0 for the GitHub code-scanning / Security tab. |
+| `--markdown`, `--md` | Emit a Markdown report. |
+| `--html` | Emit a self-contained HTML report (inline CSS, no external assets). |
 | `--strict` | Exit non-zero on `WARN` as well as `FAIL`. |
 | `--ignore ID[,ID]` | Exclude these check ids from the exit code (repeatable). Results still appear, marked `ignored`. |
 | `--fail-on ID[,ID]` | Force a non-zero exit if these ids are `FAIL` or `WARN`, even without `--strict` (repeatable). |
@@ -181,11 +183,16 @@ sudo ./vps-audit.sh --json --strict > audit.json
 | `--json` | Single JSON document (validated by [the schema](docs/vps-audit.schema.json)) | Automation, dashboards |
 | `--jsonl` | One JSON object per line, hostname/timestamp inlined | SIEM / log ingestion |
 | `--sarif` | SARIF 2.1.0 | GitHub code-scanning / Security tab |
+| `--markdown` | Markdown table | Human-readable / PR comments |
+| `--html` | Self-contained HTML page | Shareable reports |
 
 Each result carries a stable `id`, a `severity` (`critical`/`high`/`medium`/`low`/`info`),
-a `remediation` string, an `ignored` flag, and a `status` of `PASS`/`WARN`/`FAIL`/`NA`.
-The JSON top level includes `tool` (name/version/commit) for provenance and a
-`summary` with `not_applicable` counts. See [`docs/sample-report.md`](docs/sample-report.md).
+a `remediation` string, indicative `cis` control references, an `evidence` string
+(the concrete observed value), an `ignored` flag, and a `status` of
+`PASS`/`WARN`/`FAIL`/`NA`. The JSON top level includes `tool` (name/version/commit)
+for provenance and a `summary` with `not_applicable` counts. Per-check rationale
+and the full CIS mapping are in [`docs/checks.md`](docs/checks.md); see also
+[`docs/sample-report.md`](docs/sample-report.md).
 
 ### Policy exceptions
 
