@@ -86,3 +86,45 @@ setup() {
     [ "$(sarif_level PASS)" = note ]
     [ "$(sarif_level NA)" = none ]
 }
+
+# --- CIS mapping + JSON array helper -------------------------------------
+
+@test "cis_for maps mapped ids and returns empty for unmapped" {
+    [ "$(cis_for ssh-root-login)" = "5.2" ]
+    [ "$(cis_for firewall)" = "3.5" ]
+    [ "$(cis_for suid-files)" = "6.1" ]
+    [ -z "$(cis_for ssh-port)" ]
+    [ -z "$(cis_for made-up-id)" ]
+}
+
+@test "json_array_from_list renders arrays and empty" {
+    [ "$(json_array_from_list '5.3 4.2')" = '["5.3","4.2"]' ]
+    [ "$(json_array_from_list '')" = '[]' ]
+}
+
+@test "html_escape neutralises markup" {
+    [ "$(html_escape '<b>&"x"')" = '&lt;b&gt;&amp;&quot;x&quot;' ]
+}
+
+# --- Markdown / HTML emitters (from mocked results) ----------------------
+
+@test "emit_markdown produces a header and a table row per result" {
+    R_ID=(ssh-root-login) R_NAME=("SSH Root Login") R_STATUS=(FAIL) R_SEV=(high)
+    R_MSG=("root allowed") R_REM=("disable it") R_IGN=(false) R_EVID=("PermitRootLogin=yes")
+    PASS_COUNT=0 WARN_COUNT=0 FAIL_COUNT=1 NA_COUNT=0
+    VPS_AUDIT_VERSION=x VPS_AUDIT_COMMIT=y TIMESTAMP=t
+    run emit_markdown
+    [[ "$output" == *"# VPS Security Audit"* ]]
+    [[ "$output" == *"| FAIL | high | SSH Root Login | root allowed | 5.2 | disable it |"* ]]
+}
+
+@test "emit_html escapes content and stays self-contained" {
+    R_ID=(firewall) R_NAME=("Firewall") R_STATUS=(FAIL) R_SEV=(high)
+    R_MSG=('open <policy> & "x"') R_REM=("enable") R_IGN=(false) R_EVID=("policy=ACCEPT")
+    PASS_COUNT=0 WARN_COUNT=0 FAIL_COUNT=1 NA_COUNT=0
+    VPS_AUDIT_VERSION=x VPS_AUDIT_COMMIT=y TIMESTAMP=t
+    run emit_html
+    [[ "$output" == *"<!doctype html>"* ]]
+    [[ "$output" == *"open &lt;policy&gt; &amp; &quot;x&quot;"* ]]
+    [[ "$output" != *"http://"* ]]
+}

@@ -22,10 +22,11 @@
 #      commit in JSON; thresholds configurable via a --policy file
 #  #15 JSONL and SARIF output modes; --ignore/--fail-on policy exceptions;
 #      port + SUID parsers extracted into unit-testable functions
+#  #16 Markdown/HTML reports; per-check CIS mapping + evidence in JSON
 #
 
 # Tool identity (COMMIT is stamped in released artifacts by the release workflow)
-VPS_AUDIT_VERSION="3.3.0"
+VPS_AUDIT_VERSION="3.4.0"
 VPS_AUDIT_COMMIT="unknown"
 
 # ===========================================================================
@@ -144,6 +145,22 @@ meta_for() {
     esac
 }
 
+# cis_for ID -> space-separated, INDICATIVE control references from the CIS
+#   Distribution Independent Linux Benchmark. These are guidance, not a certified
+#   mapping; verify against the exact benchmark version you must comply with.
+cis_for() {
+    case "$1" in
+        ssh-root-login | ssh-password-auth) echo "5.2" ;;   # SSH server configuration
+        firewall) echo "3.5" ;;                             # host-based firewall
+        unattended-upgrades | system-updates) echo "1.9" ;; # patch management
+        running-services | port-security) echo "2.2" ;;     # special-purpose / minimise services
+        sudo-logging) echo "5.3 4.2" ;;                     # sudo + logging
+        password-policy) echo "5.4.1" ;;                    # password creation requirements
+        suid-files) echo "6.1" ;;                           # filesystem permissions / SUID audit
+        *) echo "" ;;                                       # no direct CIS control
+    esac
+}
+
 # load_policy FILE
 #   Safely apply threshold overrides from a KEY=INT file (no `source`, so no
 #   arbitrary code execution). Only known threshold keys are accepted.
@@ -192,6 +209,35 @@ json_escape() {
     s=${s//\"/\\\"}
     s=${s//$'\n'/ }
     s=${s//$'\t'/ }
+    printf '%s' "$s"
+}
+
+# json_array_from_list "a b c" -> ["a","b","c"]  (empty list -> [])
+json_array_from_list() {
+    local item first=1
+    printf '['
+    for item in $1; do
+        [ "$first" -eq 1 ] || printf ','
+        printf '"%s"' "$(json_escape "$item")"
+        first=0
+    done
+    printf ']'
+}
+
+# html_escape / md_escape for the human report formats
+html_escape() {
+    local s="$1"
+    s=${s//&/\&amp;}
+    s=${s//</\&lt;}
+    s=${s//>/\&gt;}
+    s=${s//\"/\&quot;}
+    printf '%s' "$s"
+}
+md_escape() {
+    local s="$1"
+    s=${s//\\/\\\\}
+    s=${s//|/\\|}
+    s=${s//$'\n'/ }
     printf '%s' "$s"
 }
 
@@ -270,7 +316,7 @@ print_info() {
 #   remediation are looked up from meta_for(ID). Results are stored in parallel
 #   arrays so JSON / JSONL / SARIF all emit from one source.
 check_security() {
-    local id="$1" test_name="$2" status="$3" message="$4" meta severity remediation
+    local id="$1" test_name="$2" status="$3" message="$4" evidence="${5:-}" meta severity remediation
     local ignored=false suffix=""
     meta=$(meta_for "$id")
     severity=${meta%%|*}
@@ -305,13 +351,14 @@ check_security() {
     R_MSG+=("$message")
     R_REM+=("$remediation")
     R_IGN+=("$ignored")
+    R_EVID+=("$evidence")
 }
 
-# report STATUS_MESSAGE ID NAME
+# report STATUS_MESSAGE ID NAME [EVIDENCE]
 #   Split a "STATUS|message" evaluator result and record it under ID/NAME.
 report() {
-    local res="$1" id="$2" name="$3"
-    check_security "$id" "$name" "${res%%|*}" "${res#*|}"
+    local res="$1" id="$2" name="$3" evidence="${4:-}"
+    check_security "$id" "$name" "${res%%|*}" "${res#*|}" "$evidence"
 }
 
 # in_list ID SPACE_DELIMITED_LIST -> true/false membership
@@ -339,9 +386,10 @@ compute_exit_code() {
 
 result_json_object() {
     local i="$1"
-    printf '{"id":"%s","test":"%s","status":"%s","severity":"%s","message":"%s","remediation":"%s","ignored":%s}' \
+    printf '{"id":"%s","test":"%s","status":"%s","severity":"%s","message":"%s","remediation":"%s","cis":%s,"evidence":"%s","ignored":%s}' \
         "$(json_escape "${R_ID[$i]}")" "$(json_escape "${R_NAME[$i]}")" "${R_STATUS[$i]}" \
         "$(json_escape "${R_SEV[$i]}")" "$(json_escape "${R_MSG[$i]}")" "$(json_escape "${R_REM[$i]}")" \
+        "$(json_array_from_list "$(cis_for "${R_ID[$i]}")")" "$(json_escape "${R_EVID[$i]}")" \
         "${R_IGN[$i]}"
 }
 
@@ -372,6 +420,57 @@ emit_jsonl() {
         obj=$(result_json_object "$i")
         printf '{"hostname":"%s","timestamp":"%s",%s\n' "$host" "$TIMESTAMP" "${obj#\{}"
     done
+}
+
+# Markdown report (human-friendly, shareable).
+emit_markdown() {
+    local i cis
+    printf '# VPS Security Audit\n\n'
+    printf -- '- **Host:** %s\n' "$(hostname)"
+    printf -- '- **Generated:** %s\n' "$TIMESTAMP"
+    printf -- '- **Tool:** vps-audit %s (%s)\n' "$VPS_AUDIT_VERSION" "$VPS_AUDIT_COMMIT"
+    printf -- '- **Summary:** PASS %d · WARN %d · FAIL %d · NA %d\n\n' \
+        "$PASS_COUNT" "$WARN_COUNT" "$FAIL_COUNT" "$NA_COUNT"
+    printf '| Status | Severity | Check | Finding | CIS | Remediation |\n'
+    printf '|--------|----------|-------|---------|-----|-------------|\n'
+    for i in "${!R_ID[@]}"; do
+        cis=$(cis_for "${R_ID[$i]}")
+        printf '| %s | %s | %s | %s | %s | %s |\n' \
+            "${R_STATUS[$i]}$([ "${R_IGN[$i]}" = true ] && printf ' (ignored)')" \
+            "$(md_escape "${R_SEV[$i]}")" "$(md_escape "${R_NAME[$i]}")" \
+            "$(md_escape "${R_MSG[$i]}")" "$(md_escape "${cis:--}")" \
+            "$(md_escape "${R_REM[$i]}")"
+    done
+    printf '\n'
+}
+
+# Self-contained HTML report (inline CSS; no external assets).
+emit_html() {
+    local i cls cis
+    printf '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+    printf '<meta name="viewport" content="width=device-width,initial-scale=1">'
+    printf '<title>VPS Security Audit — %s</title>' "$(html_escape "$(hostname)")"
+    printf '<style>body{font:14px/1.5 system-ui,sans-serif;margin:2rem;color:#1a1a1a}'
+    printf 'table{border-collapse:collapse;width:100%%}th,td{border:1px solid #ddd;padding:.4rem .6rem;text-align:left;vertical-align:top}'
+    printf 'th{background:#f4f4f4}.PASS{color:#137333}.WARN{color:#a56100}.FAIL{color:#b00020;font-weight:600}.NA{color:#666}'
+    printf '.sev{text-transform:capitalize}.muted{color:#666}code{background:#f4f4f4;padding:.1rem .3rem;border-radius:3px}</style></head><body>'
+    printf '<h1>VPS Security Audit</h1>'
+    printf '<p class="muted">Host <b>%s</b> · %s · vps-audit %s (%s)</p>' \
+        "$(html_escape "$(hostname)")" "$TIMESTAMP" \
+        "$(html_escape "$VPS_AUDIT_VERSION")" "$(html_escape "$VPS_AUDIT_COMMIT")"
+    printf '<p>Summary: <span class="PASS">PASS %d</span> · <span class="WARN">WARN %d</span> · <span class="FAIL">FAIL %d</span> · <span class="NA">NA %d</span></p>' \
+        "$PASS_COUNT" "$WARN_COUNT" "$FAIL_COUNT" "$NA_COUNT"
+    printf '<table><thead><tr><th>Status</th><th>Severity</th><th>Check</th><th>Finding</th><th>CIS</th><th>Remediation</th></tr></thead><tbody>'
+    for i in "${!R_ID[@]}"; do
+        cls=${R_STATUS[$i]}
+        cis=$(cis_for "${R_ID[$i]}")
+        printf '<tr><td class="%s">%s%s</td><td class="sev">%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>' \
+            "$cls" "$cls" "$([ "${R_IGN[$i]}" = true ] && printf ' (ignored)')" \
+            "$(html_escape "${R_SEV[$i]}")" "$(html_escape "${R_NAME[$i]}")" \
+            "$(html_escape "${R_MSG[$i]}")" "$(html_escape "${cis:--}")" \
+            "$(html_escape "${R_REM[$i]}")"
+    done
+    printf '</tbody></table></body></html>\n'
 }
 
 # SARIF helpers (pure).
@@ -486,6 +585,8 @@ Options:
   --json            Emit machine-readable JSON to stdout (suppresses colour UI)
   --jsonl           Emit one JSON object per result line (SIEM-friendly)
   --sarif           Emit SARIF 2.1.0 (GitHub code-scanning)
+  --markdown, --md  Emit a Markdown report to stdout
+  --html            Emit a self-contained HTML report to stdout
   --strict          Exit non-zero on WARN as well as FAIL (default: FAIL only)
   --ignore ID[,ID]  Exclude these check ids from the exit code (repeatable)
   --fail-on ID[,ID] Force non-zero exit if these ids FAIL or WARN (repeatable)
@@ -533,7 +634,7 @@ main() {
     WARN_COUNT=0
     FAIL_COUNT=0
     NA_COUNT=0
-    R_ID=() R_NAME=() R_STATUS=() R_SEV=() R_MSG=() R_REM=() R_IGN=()
+    R_ID=() R_NAME=() R_STATUS=() R_SEV=() R_MSG=() R_REM=() R_IGN=() R_EVID=()
     TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
     REPORT_FILE="vps-audit-report-${TIMESTAMP}.txt"
 
@@ -550,6 +651,8 @@ main() {
             --json) OUTPUT_MODE=json ;;
             --jsonl) OUTPUT_MODE=jsonl ;;
             --sarif) OUTPUT_MODE=sarif ;;
+            --markdown | --md) OUTPUT_MODE=markdown ;;
+            --html) OUTPUT_MODE=html ;;
             --strict) STRICT=true ;;
             --public-ip) PUBLIC_IP_LOOKUP=true ;;
             --no-public-ip) PUBLIC_IP_LOOKUP=false ;; # kept for backward compat (now the default)
@@ -685,16 +788,16 @@ main() {
     else
         SSH_ROOT=$(sshd_get "permitrootlogin")
         SSH_ROOT=${SSH_ROOT:-prohibit-password}
-        report "$(eval_ssh_root_login "$SSH_ROOT")" "ssh-root-login" "SSH Root Login"
+        report "$(eval_ssh_root_login "$SSH_ROOT")" "ssh-root-login" "SSH Root Login" "PermitRootLogin=$SSH_ROOT"
 
         SSH_PASSWORD=$(sshd_get "passwordauthentication")
         SSH_PASSWORD=${SSH_PASSWORD:-yes}
-        report "$(eval_ssh_password "$SSH_PASSWORD")" "ssh-password-auth" "SSH Password Auth"
+        report "$(eval_ssh_password "$SSH_PASSWORD")" "ssh-password-auth" "SSH Password Auth" "PasswordAuthentication=$SSH_PASSWORD"
 
         UNPRIV_START=$(sysctl -n net.ipv4.ip_unprivileged_port_start 2>/dev/null || echo 1024)
         SSH_PORT=$(sshd_get "port")
         SSH_PORT=${SSH_PORT:-22}
-        report "$(eval_ssh_port "$SSH_PORT" "$UNPRIV_START")" "ssh-port" "SSH Port"
+        report "$(eval_ssh_port "$SSH_PORT" "$UNPRIV_START")" "ssh-port" "SSH Port" "Port=$SSH_PORT"
     fi
 
     # Firewall — verify it actually filters (#2).
@@ -728,7 +831,7 @@ main() {
             docker ps --format '{{.Image}} {{.Names}}' 2>/dev/null | grep -qiE 'fail2ban|crowdsec' && IPS_ACTIVE=1
         fi
     fi
-    report "$(eval_ips "$IPS_INSTALLED" "$IPS_ACTIVE")" "intrusion-prevention" "Intrusion Prevention"
+    report "$(eval_ips "$IPS_INSTALLED" "$IPS_ACTIVE")" "intrusion-prevention" "Intrusion Prevention" "installed=$IPS_INSTALLED active=$IPS_ACTIVE"
 
     # Failed logins — execute the log source correctly; include rotation (#1).
     FAILED_LOGINS=0
@@ -752,9 +855,9 @@ main() {
     FAILED_LOGINS=${FAILED_LOGINS:-0}
     FAILED_LOGINS=$((10#$FAILED_LOGINS))
     case "$(status_from_thresholds "$FAILED_LOGINS" "$FAILED_LOGINS_WARN" "$FAILED_LOGINS_FAIL")" in
-        PASS) check_security "failed-logins" "Failed Logins" "PASS" "$FAILED_LOGINS failed login attempts ($LOGIN_SRC) - within normal range" ;;
-        WARN) check_security "failed-logins" "Failed Logins" "WARN" "$FAILED_LOGINS failed login attempts ($LOGIN_SRC) - possible probing" ;;
-        FAIL) check_security "failed-logins" "Failed Logins" "FAIL" "$FAILED_LOGINS failed login attempts ($LOGIN_SRC) - possible brute-force attack" ;;
+        PASS) check_security "failed-logins" "Failed Logins" "PASS" "$FAILED_LOGINS failed login attempts ($LOGIN_SRC) - within normal range" "count=$FAILED_LOGINS src=$LOGIN_SRC" ;;
+        WARN) check_security "failed-logins" "Failed Logins" "WARN" "$FAILED_LOGINS failed login attempts ($LOGIN_SRC) - possible probing" "count=$FAILED_LOGINS src=$LOGIN_SRC" ;;
+        FAIL) check_security "failed-logins" "Failed Logins" "FAIL" "$FAILED_LOGINS failed login attempts ($LOGIN_SRC) - possible brute-force attack" "count=$FAILED_LOGINS src=$LOGIN_SRC" ;;
     esac
 
     # System updates — distinguish security from non-security.
@@ -762,7 +865,7 @@ main() {
         APT_SIM=$(apt-get -s upgrade 2>/dev/null)
         ALL_UPDATES=$(echo "$APT_SIM" | grep -cE '^Inst ')
         SEC_UPDATES=$(echo "$APT_SIM" | grep -E '^Inst ' | grep -ciE '\-security|Debian-Security')
-        report "$(eval_updates "$SEC_UPDATES" "$ALL_UPDATES")" "system-updates" "System Updates"
+        report "$(eval_updates "$SEC_UPDATES" "$ALL_UPDATES")" "system-updates" "System Updates" "security=$SEC_UPDATES total=$ALL_UPDATES"
     else
         check_security "system-updates" "System Updates" "NA" "apt not present - use your distro's package manager to check updates"
     fi
@@ -771,9 +874,9 @@ main() {
     if command -v systemctl >/dev/null 2>&1; then
         SERVICES=$(systemctl list-units --type=service --state=running 2>/dev/null | grep -c "loaded active running")
         case "$(status_from_thresholds "$SERVICES" "$SERVICES_WARN" "$SERVICES_FAIL")" in
-            PASS) check_security "running-services" "Running Services" "PASS" "$SERVICES services running - reasonable for a typical server" ;;
-            WARN) check_security "running-services" "Running Services" "WARN" "$SERVICES services running - review whether all are needed" ;;
-            FAIL) check_security "running-services" "Running Services" "FAIL" "Too many services running ($SERVICES) - increases attack surface" ;;
+            PASS) check_security "running-services" "Running Services" "PASS" "$SERVICES services running - reasonable for a typical server" "count=$SERVICES" ;;
+            WARN) check_security "running-services" "Running Services" "WARN" "$SERVICES services running - review whether all are needed" "count=$SERVICES" ;;
+            FAIL) check_security "running-services" "Running Services" "FAIL" "Too many services running ($SERVICES) - increases attack surface" "count=$SERVICES" ;;
         esac
     fi
 
@@ -792,9 +895,9 @@ main() {
             < <(printf '%s\n' "$LISTEN_RAW" | ports_summary)
 
         case "$(status_from_thresholds "$PUB_N" "$PUBLIC_PORTS_WARN" "$PUBLIC_PORTS_FAIL")" in
-            PASS) check_security "port-security" "Port Security" "PASS" "$PUB_N internet-facing ports [$PUB_UNIQ] (total listening: $TOTAL_N [$TOTAL_UNIQ])" ;;
-            WARN) check_security "port-security" "Port Security" "WARN" "$PUB_N internet-facing ports [$PUB_UNIQ] - review exposure (total: $TOTAL_N)" ;;
-            FAIL) check_security "port-security" "Port Security" "FAIL" "$PUB_N internet-facing ports [$PUB_UNIQ] - high exposure, firewall unneeded ones (total: $TOTAL_N)" ;;
+            PASS) check_security "port-security" "Port Security" "PASS" "$PUB_N internet-facing ports [$PUB_UNIQ] (total listening: $TOTAL_N [$TOTAL_UNIQ])" "public=$PUB_UNIQ total=$TOTAL_UNIQ" ;;
+            WARN) check_security "port-security" "Port Security" "WARN" "$PUB_N internet-facing ports [$PUB_UNIQ] - review exposure (total: $TOTAL_N)" "public=$PUB_UNIQ total=$TOTAL_UNIQ" ;;
+            FAIL) check_security "port-security" "Port Security" "FAIL" "$PUB_N internet-facing ports [$PUB_UNIQ] - high exposure, firewall unneeded ones (total: $TOTAL_N)" "public=$PUB_UNIQ total=$TOTAL_UNIQ" ;;
         esac
     fi
 
@@ -804,9 +907,9 @@ main() {
     DISK_AVAIL=$(df -h / | awk 'NR==2 {print $4}')
     DISK_USAGE=$(df -h / | awk 'NR==2 {print int($5)}')
     case "$(status_from_thresholds "$DISK_USAGE" "$DISK_WARN" "$DISK_FAIL")" in
-        PASS) check_security "disk-usage" "Disk Usage" "PASS" "Healthy disk space (${DISK_USAGE}% used - ${DISK_USED} of ${DISK_TOTAL}, ${DISK_AVAIL} free)" ;;
-        WARN) check_security "disk-usage" "Disk Usage" "WARN" "Moderate disk usage (${DISK_USAGE}% used - ${DISK_USED} of ${DISK_TOTAL}, ${DISK_AVAIL} free)" ;;
-        FAIL) check_security "disk-usage" "Disk Usage" "FAIL" "Critical disk usage (${DISK_USAGE}% used - ${DISK_USED} of ${DISK_TOTAL}, ${DISK_AVAIL} free)" ;;
+        PASS) check_security "disk-usage" "Disk Usage" "PASS" "Healthy disk space (${DISK_USAGE}% used - ${DISK_USED} of ${DISK_TOTAL}, ${DISK_AVAIL} free)" "usage=${DISK_USAGE}%" ;;
+        WARN) check_security "disk-usage" "Disk Usage" "WARN" "Moderate disk usage (${DISK_USAGE}% used - ${DISK_USED} of ${DISK_TOTAL}, ${DISK_AVAIL} free)" "usage=${DISK_USAGE}%" ;;
+        FAIL) check_security "disk-usage" "Disk Usage" "FAIL" "Critical disk usage (${DISK_USAGE}% used - ${DISK_USED} of ${DISK_TOTAL}, ${DISK_AVAIL} free)" "usage=${DISK_USAGE}%" ;;
     esac
 
     # Memory usage
@@ -815,9 +918,9 @@ main() {
     MEM_AVAIL=$(free -h | awk '/^Mem:/ {print $7}')
     MEM_USAGE=$(free | awk '/^Mem:/ {printf "%.0f", $3/$2 * 100}')
     case "$(status_from_thresholds "$MEM_USAGE" "$MEM_WARN" "$MEM_FAIL")" in
-        PASS) check_security "memory-usage" "Memory Usage" "PASS" "Healthy memory usage (${MEM_USAGE}% used - ${MEM_USED} of ${MEM_TOTAL}, ${MEM_AVAIL} available)" ;;
-        WARN) check_security "memory-usage" "Memory Usage" "WARN" "Moderate memory usage (${MEM_USAGE}% used - ${MEM_USED} of ${MEM_TOTAL}, ${MEM_AVAIL} available)" ;;
-        FAIL) check_security "memory-usage" "Memory Usage" "FAIL" "Critical memory usage (${MEM_USAGE}% used - ${MEM_USED} of ${MEM_TOTAL}, ${MEM_AVAIL} available)" ;;
+        PASS) check_security "memory-usage" "Memory Usage" "PASS" "Healthy memory usage (${MEM_USAGE}% used - ${MEM_USED} of ${MEM_TOTAL}, ${MEM_AVAIL} available)" "usage=${MEM_USAGE}%" ;;
+        WARN) check_security "memory-usage" "Memory Usage" "WARN" "Moderate memory usage (${MEM_USAGE}% used - ${MEM_USED} of ${MEM_TOTAL}, ${MEM_AVAIL} available)" "usage=${MEM_USAGE}%" ;;
+        FAIL) check_security "memory-usage" "Memory Usage" "FAIL" "Critical memory usage (${MEM_USAGE}% used - ${MEM_USED} of ${MEM_TOTAL}, ${MEM_AVAIL} available)" "usage=${MEM_USAGE}%" ;;
     esac
 
     # CPU usage — sample /proc/stat over 1s (accurate, locale-independent).
@@ -845,9 +948,9 @@ main() {
         CPU_IDLE=$((100 - CPU_USAGE))
     fi
     case "$(status_from_thresholds "$CPU_USAGE" "$CPU_WARN" "$CPU_FAIL")" in
-        PASS) check_security "cpu-usage" "CPU Usage" "PASS" "Healthy CPU usage (${CPU_USAGE}% - Idle: ${CPU_IDLE}%, Load: ${CPU_LOAD}, Cores: ${CPU_CORES})" ;;
-        WARN) check_security "cpu-usage" "CPU Usage" "WARN" "Moderate CPU usage (${CPU_USAGE}% - Idle: ${CPU_IDLE}%, Load: ${CPU_LOAD}, Cores: ${CPU_CORES})" ;;
-        FAIL) check_security "cpu-usage" "CPU Usage" "FAIL" "Critical CPU usage (${CPU_USAGE}% - Idle: ${CPU_IDLE}%, Load: ${CPU_LOAD}, Cores: ${CPU_CORES})" ;;
+        PASS) check_security "cpu-usage" "CPU Usage" "PASS" "Healthy CPU usage (${CPU_USAGE}% - Idle: ${CPU_IDLE}%, Load: ${CPU_LOAD}, Cores: ${CPU_CORES})" "usage=${CPU_USAGE}%" ;;
+        WARN) check_security "cpu-usage" "CPU Usage" "WARN" "Moderate CPU usage (${CPU_USAGE}% - Idle: ${CPU_IDLE}%, Load: ${CPU_LOAD}, Cores: ${CPU_CORES})" "usage=${CPU_USAGE}%" ;;
+        FAIL) check_security "cpu-usage" "CPU Usage" "FAIL" "Critical CPU usage (${CPU_USAGE}% - Idle: ${CPU_IDLE}%, Load: ${CPU_LOAD}, Cores: ${CPU_CORES})" "usage=${CPU_USAGE}%" ;;
     esac
 
     # Sudo logging — syslog is the secure DEFAULT; only FAIL if disabled (#5).
@@ -870,9 +973,9 @@ main() {
 
     if [ -n "$PWQ_MINLEN" ]; then
         if [ "$PWQ_MINLEN" -ge 12 ]; then
-            check_security "password-policy" "Password Policy" "PASS" "Strong password policy enforced (pwquality minlen=$PWQ_MINLEN)"
+            check_security "password-policy" "Password Policy" "PASS" "Strong password policy enforced (pwquality minlen=$PWQ_MINLEN)" "minlen=$PWQ_MINLEN"
         else
-            check_security "password-policy" "Password Policy" "FAIL" "Weak password policy (pwquality minlen=$PWQ_MINLEN) - set minlen >= 12"
+            check_security "password-policy" "Password Policy" "FAIL" "Weak password policy (pwquality minlen=$PWQ_MINLEN) - set minlen >= 12" "minlen=$PWQ_MINLEN"
         fi
     elif grep -rqE 'pam_(pwquality|cracklib)\.so' /etc/pam.d/ 2>/dev/null; then
         check_security "password-policy" "Password Policy" "WARN" "A PAM password-quality module is active but no explicit minlen>=12 was found - verify strength rules"
@@ -899,7 +1002,7 @@ main() {
         if [ "$UNOWNED" -eq 0 ]; then
             check_security "suid-files" "SUID Files" "PASS" "$SUID_TOTAL SUID files, all owned by installed packages"
         else
-            check_security "suid-files" "SUID Files" "FAIL" "$UNOWNED of $SUID_TOTAL SUID-root files are NOT owned by any package - investigate:${UNOWNED_LIST}"
+            check_security "suid-files" "SUID Files" "FAIL" "$UNOWNED of $SUID_TOTAL SUID-root files are NOT owned by any package - investigate:${UNOWNED_LIST}" "unowned=${UNOWNED_LIST}"
         fi
     else
         check_security "suid-files" "SUID Files" "WARN" "$SUID_TOTAL SUID-root files found; no package manager to verify them - review manually: $(printf '%s' "$SUID_LIST" | tr '\n' ' ')"
@@ -925,6 +1028,8 @@ main() {
         json) emit_json "$exit_code" ;;
         jsonl) emit_jsonl ;;
         sarif) emit_sarif ;;
+        markdown) emit_markdown ;;
+        html) emit_html ;;
         *)
             say "\n${BOLD}Summary:${NC} ${GREEN}PASS=$PASS_COUNT${NC} ${YELLOW}WARN=$WARN_COUNT${NC} ${RED}FAIL=$FAIL_COUNT${NC} ${GRAY}NA=$NA_COUNT${NC}"
             say "VPS audit complete. Full report saved to $REPORT_FILE"
@@ -971,7 +1076,7 @@ check_firewall_status() {
         ipt=$(iptables -S INPUT 2>/dev/null)
         policy=$(echo "$ipt" | awk '/^-P INPUT/ {print $3}')
         rules=$(echo "$ipt" | grep -vcE '^(-P|-N)')
-        report "$(eval_firewall_iptables "$policy" "$rules")" "firewall" "Firewall Status (iptables)"
+        report "$(eval_firewall_iptables "$policy" "$rules")" "firewall" "Firewall Status (iptables)" "policy=$policy rules=$rules"
     else
         check_security "firewall" "Firewall Status" "FAIL" "No recognised firewall tool (ufw/firewalld/nft/iptables) is installed"
     fi

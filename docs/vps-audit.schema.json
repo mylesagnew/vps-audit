@@ -47,7 +47,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "test", "status", "severity", "message", "remediation", "ignored"],
+        "required": ["id", "test", "status", "severity", "message", "remediation", "cis", "evidence", "ignored"],
         "properties": {
           "id": {
             "type": "string",
@@ -69,6 +69,15 @@
           "remediation": {
             "type": "string",
             "description": "How to remediate a failing result (may be empty for informational checks)"
+          },
+          "cis": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Indicative CIS Distribution Independent Linux Benchmark control references (may be empty)"
+          },
+          "evidence": {
+            "type": "string",
+            "description": "Concrete observed value backing the result (e.g. 'PermitRootLogin=yes'); may be empty"
           },
           "ignored": {
             "type": "boolean",
