@@ -18,6 +18,10 @@ teardown() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"Usage:"* ]]
     [[ "$output" == *"--json"* ]]
+    [[ "$output" == *"--jsonl"* ]]
+    [[ "$output" == *"--sarif"* ]]
+    [[ "$output" == *"--ignore"* ]]
+    [[ "$output" == *"--fail-on"* ]]
     [[ "$output" == *"--public-ip"* ]]
     [[ "$output" == *"--no-public-ip"* ]]
 }

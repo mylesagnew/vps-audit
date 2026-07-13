@@ -47,7 +47,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "test", "status", "severity", "message", "remediation"],
+        "required": ["id", "test", "status", "severity", "message", "remediation", "ignored"],
         "properties": {
           "id": {
             "type": "string",
@@ -69,6 +69,10 @@
           "remediation": {
             "type": "string",
             "description": "How to remediate a failing result (may be empty for informational checks)"
+          },
+          "ignored": {
+            "type": "boolean",
+            "description": "True when excluded from the exit code via --ignore"
           }
         }
       }
