@@ -177,3 +177,58 @@ setup() {
     DRIFT_REG=()
     [ "$(compute_exit_code)" = 0 ]
 }
+
+# --- webhook payload -----------------------------------------------------
+
+@test "webhook_payload includes only WARN/FAIL findings and no evidence/paths" {
+    VPS_AUDIT_VERSION=3.6.0 TIMESTAMP=t
+    PASS_COUNT=1 WARN_COUNT=1 FAIL_COUNT=1 NA_COUNT=0
+    R_ID=(a b c) R_NAME=(A B C) R_STATUS=(PASS WARN FAIL) R_SEV=(low low high)
+    R_MSG=(ok warnmsg failmsg) R_REM=(x y z) R_IGN=(false false false) R_EVID=(e1 e2 e3)
+    run webhook_payload
+    python3 - "$output" <<'PY'
+import json, sys
+d = json.loads(sys.argv[1])
+ids = [f["id"] for f in d["findings"]]
+assert ids == ["b", "c"], ids                       # only WARN/FAIL
+for f in d["findings"]:
+    assert set(f) == {"id", "status", "severity", "message"}, f   # no evidence/remediation
+assert "hostname" in d and "summary" in d
+PY
+}
+
+# --- remediation (dry-run only; never executes host changes in tests) ----
+
+@test "remediation_for maps allowlisted ids and empty otherwise" {
+    [[ "$(remediation_for ssh-root-login)" == "Set 'PermitRootLogin no'"* ]]
+    [[ "$(remediation_for firewall 2222)" == *"Allow SSH 2222"* ]]
+    [ -z "$(remediation_for cpu-usage)" ]
+    [ -z "$(remediation_for made-up)" ]
+}
+
+@test "run_remediation dry-run plans only FAILed allowlisted checks" {
+    SSH_PORT=22 REMEDIATE_ONLY=""
+    R_ID=(ssh-root-login ssh-port firewall disk-usage) R_STATUS=(FAIL WARN FAIL FAIL)
+    run run_remediation false
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"would fix ssh-root-login"* ]]
+    [[ "$output" == *"would fix firewall"* ]]
+    [[ "$output" != *"ssh-port"* ]]     # WARN, not remediated
+    [[ "$output" != *"disk-usage"* ]]   # FAIL but not allowlisted
+}
+
+@test "run_remediation --remediate-only limits scope" {
+    SSH_PORT=22 REMEDIATE_ONLY=" firewall "
+    R_ID=(ssh-root-login firewall) R_STATUS=(FAIL FAIL)
+    run run_remediation false
+    [[ "$output" == *"would fix firewall"* ]]
+    [[ "$output" != *"ssh-root-login"* ]]
+}
+
+@test "run_remediation apply as non-root refuses" {
+    [ "$(id -u)" -eq 0 ] && skip "running as root"
+    R_ID=(ssh-root-login) R_STATUS=(FAIL) REMEDIATE_ONLY="" SSH_PORT=22
+    run run_remediation true
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"must run as root"* ]]
+}

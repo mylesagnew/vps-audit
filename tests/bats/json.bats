@@ -103,6 +103,22 @@ PY
     [[ "$output" == *"baseline"* ]]
 }
 
+@test "--remediate is dry-run: emits a plan on stderr and changes nothing" {
+    run bash "$SCRIPT" --json --no-public-ip --remediate
+    [ "$status" -le 1 ]
+    # stdout is still clean JSON
+    [[ "$output" == "{"* ]]
+    # remediation banner goes to stderr, captured together by bats 'run'
+    run bash -c 'bash "'"$SCRIPT"'" --json --no-public-ip --remediate 2>&1 >/dev/null'
+    [[ "$output" == *"DRY-RUN"* ]]
+}
+
+@test "--webhook to an unreachable URL fails gracefully (no crash)" {
+    run bash "$SCRIPT" --json --no-public-ip --webhook http://127.0.0.1:9/nope
+    [ "$status" -le 1 ]
+    [[ "$output" == "{"* ]]
+}
+
 @test "--ignore removes a check from the exit gate" {
     # ssh-config or firewall may FAIL in CI; ignore every id that can fail so the
     # gate is satisfied regardless of host state, proving --ignore is honoured.

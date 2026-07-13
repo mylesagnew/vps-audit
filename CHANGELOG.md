@@ -5,6 +5,27 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.6.0] - 2026-07-13
+
+Optional integrations — both opt-in and safe by default.
+
+### Added
+- **Webhook output (`--webhook URL`)**: POSTs a compact JSON payload (`tool`,
+  `hostname`, `summary`, and WARN/FAIL findings only) to a user-supplied endpoint
+  on completion. Deliberately **omits** evidence strings, public IP, port lists,
+  and SUID paths to minimise data egress. `--webhook-on fail` restricts to runs
+  with FAILs. Logs the HTTP status to stderr; never affects stdout or exit code.
+- **Gated auto-remediation (`--remediate` / `--remediate-apply`)**: off by
+  default and **dry-run by default**. Applies only a small allowlist of
+  reversible hardening fixes (`PermitRootLogin no`, `PasswordAuthentication no`,
+  enable `ufw`, install `unattended-upgrades`) and only to `FAIL`ing checks.
+  Safeguards: applying requires `--remediate-apply` **and** root; sshd changes are
+  backed up and validated with `sshd -t` before reload; `ufw` is enabled only
+  **after** allowing the current SSH port (no lock-out). `--remediate-only ID`
+  limits scope. All remediation activity logs to stderr, separate from output.
+- Unit tests for the webhook payload and remediation planning; the container
+  matrix now also exercises `--remediate` dry-run on every distro.
+
 ## [3.5.0] - 2026-07-13
 
 Drift detection and multi-distro CI. Additive.
@@ -221,6 +242,7 @@ CI/CD gate. **Breaking:** the script now exits non-zero when checks fail.
 - Corrected repository attribution (fork of `vernu/vps-audit`, maintained by
   `mylesagnew`).
 
+[3.6.0]: https://github.com/mylesagnew/vps-audit/releases/tag/v3.6.0
 [3.5.0]: https://github.com/mylesagnew/vps-audit/releases/tag/v3.5.0
 [3.4.0]: https://github.com/mylesagnew/vps-audit/releases/tag/v3.4.0
 [3.3.0]: https://github.com/mylesagnew/vps-audit/releases/tag/v3.3.0
