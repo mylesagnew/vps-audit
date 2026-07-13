@@ -26,9 +26,12 @@
 #  #17 Baseline drift mode (--baseline/--fail-on-drift); multi-distro CI matrix
 #  #18 Opt-in webhook output; gated, dry-run-by-default auto-remediation
 #
+# 4.0.0 is a stability milestone consolidating #1-#18; no new breaking changes
+# versus 3.6. See CHANGELOG.md and docs/checks.md.
+#
 
 # Tool identity (COMMIT is stamped in released artifacts by the release workflow)
-VPS_AUDIT_VERSION="3.6.0"
+VPS_AUDIT_VERSION="4.0.0"
 VPS_AUDIT_COMMIT="unknown"
 
 # ===========================================================================

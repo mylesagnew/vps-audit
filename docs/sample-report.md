@@ -35,7 +35,7 @@ Validates against [`vps-audit.schema.json`](vps-audit.schema.json).
 
 ```json
 {
-  "tool": { "name": "vps-audit", "version": "3.3.0", "commit": "1a2b3c4" },
+  "tool": { "name": "vps-audit", "version": "4.0.0", "commit": "1a2b3c4" },
   "timestamp": "20260712_034653",
   "hostname": "web-01",
   "summary": { "pass": 14, "warn": 2, "fail": 1, "not_applicable": 0 },

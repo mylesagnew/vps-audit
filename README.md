@@ -1,8 +1,45 @@
-# VPS Security Audit Script
+# VPS Security Audit
 
-A comprehensive Bash script for auditing the security and performance of your VPS (Virtual Private Server). This tool performs various security checks and provides a detailed report with recommendations for improvements.
+[![Lint](https://github.com/mylesagnew/vps-audit/actions/workflows/lint.yml/badge.svg)](https://github.com/mylesagnew/vps-audit/actions/workflows/lint.yml)
+[![Container tests](https://github.com/mylesagnew/vps-audit/actions/workflows/container-tests.yml/badge.svg)](https://github.com/mylesagnew/vps-audit/actions/workflows/container-tests.yml)
+[![Release](https://img.shields.io/github/v/release/mylesagnew/vps-audit?sort=semver)](https://github.com/mylesagnew/vps-audit/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+A single, dependency-light Bash script that audits the security posture and
+health of a Linux VPS and produces an actionable, machine-readable report. Runs
+as root, makes **no network calls by default**, and is safe to gate a CI/CD
+pipeline on.
 
 ![Sample Output](./docs/screenshot.png)
+
+## Highlights
+
+| Capability | How | Since |
+|------------|-----|-------|
+| **18 security & health checks** | SSH (`sshd -T`), firewall, updates, IPS, SUID, password policy, ports, sudo logging, disk/mem/cpu, … | 2.0 |
+| **Trustworthy verdicts** | checks verify *effective* state (no false PASS/FAIL); [rationale per check](docs/checks.md) | 2.0 |
+| **CI/CD gating** | `--json` + exit codes; `--strict`, `--fail-on ID`, `--ignore ID` | 2.0–3.3 |
+| **Output formats** | JSON · JSONL · SARIF · Markdown · HTML | 3.3–3.4 |
+| **Compliance evidence** | stable check `id`s, `severity`, `remediation`, `evidence`, indicative CIS mapping | 3.0–3.4 |
+| **Per-role tuning** | `--policy FILE` thresholds ([web/db/bastion examples](config/roles)) | 3.2 |
+| **Drift detection** | `--baseline FILE` + `--fail-on-drift` | 3.5 |
+| **Scheduling** | [systemd timer + cron examples](examples) | 3.2 |
+| **Integrations** | opt-in `--webhook`; gated, dry-run-by-default `--remediate` | 3.6 |
+| **Supply-chain safety** | checksum + **signed build-provenance** ([Sigstore attestation](#recommended-install-a-verified-release)) on every release | 2.1–3.0 |
+| **Hardened & tested** | pinned CI, ShellCheck/shfmt/Bats/actionlint, real Ubuntu/Debian/Rocky container runs | 2.1–3.5 |
+
+## Quick start
+
+```bash
+# Download a verified release, check the checksum, and run (see Installation for details):
+VERSION=v4.0.0
+curl -fsSLO "https://github.com/mylesagnew/vps-audit/releases/download/${VERSION}/vps-audit.sh"
+curl -fsSLO "https://github.com/mylesagnew/vps-audit/releases/download/${VERSION}/SHA256SUMS"
+sha256sum -c SHA256SUMS --ignore-missing        # must print: vps-audit.sh: OK
+chmod +x vps-audit.sh
+sudo ./vps-audit.sh                              # human-readable report
+sudo ./vps-audit.sh --json --strict > audit.json # CI gate (non-zero on FAIL)
+```
 
 ## Features
 

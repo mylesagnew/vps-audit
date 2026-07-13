@@ -5,6 +5,25 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.0] - 2026-07-13
+
+Stability milestone. This release **consolidates** the 2.x/3.x work into a
+maintained 4.0 line; it contains **no new features and no new breaking changes**
+versus 3.6.0 — the major bump marks the tool's maturity and API stability.
+
+Since the 1.x upstream, `vps-audit` gained: trustworthy checks (no false
+PASS/FAIL), hardened root execution and race-free reporting, a sourceable
+pure-function architecture with a Bats + multi-distro container test suite,
+stable check IDs with severity/remediation/evidence and indicative CIS mapping,
+five output formats (text/JSON/JSONL/SARIF/Markdown/HTML), policy files,
+`--ignore`/`--fail-on`, baseline drift detection, opt-in webhooks, gated
+dry-run-by-default remediation, and checksum-verified, Sigstore-attested releases.
+
+### Changed
+- README rewritten with status badges, a capability feature matrix, and a
+  copy-paste quick start.
+- Version bumped to 4.0.0.
+
 ## [3.6.0] - 2026-07-13
 
 Optional integrations — both opt-in and safe by default.
@@ -242,6 +261,7 @@ CI/CD gate. **Breaking:** the script now exits non-zero when checks fail.
 - Corrected repository attribution (fork of `vernu/vps-audit`, maintained by
   `mylesagnew`).
 
+[4.0.0]: https://github.com/mylesagnew/vps-audit/releases/tag/v4.0.0
 [3.6.0]: https://github.com/mylesagnew/vps-audit/releases/tag/v3.6.0
 [3.5.0]: https://github.com/mylesagnew/vps-audit/releases/tag/v3.5.0
 [3.4.0]: https://github.com/mylesagnew/vps-audit/releases/tag/v3.4.0
