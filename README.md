@@ -154,6 +154,8 @@ sudo ./vps-audit.sh -o /var/log/vps-audit.txt
 | `--strict` | Exit non-zero on `WARN` as well as `FAIL`. |
 | `--ignore ID[,ID]` | Exclude these check ids from the exit code (repeatable). Results still appear, marked `ignored`. |
 | `--fail-on ID[,ID]` | Force a non-zero exit if these ids are `FAIL` or `WARN`, even without `--strict` (repeatable). |
+| `--baseline FILE` | Compare against a prior `--json`/`--jsonl` run and report [drift](#drift-detection). |
+| `--fail-on-drift` | Exit non-zero if any check regressed vs the baseline. |
 | `--public-ip` | Enable the external public-IP lookup (`api.ipify.org`). Off by default. |
 | `--no-public-ip` | Explicitly disable the public-IP lookup (the default; kept for backward compatibility). |
 | `--policy FILE` | Load threshold overrides from `FILE` (see [Policy files](#policy-files)). |
@@ -206,6 +208,23 @@ sudo ./vps-audit.sh --json --strict --ignore ssh-port --fail-on firewall
 `--ignore` keeps the check in the output (marked `"ignored": true`) but removes it
 from the exit code; `--fail-on` forces a non-zero exit if the named id is `FAIL`
 or `WARN`. Both accept comma-separated lists and repeat.
+
+### Drift detection
+
+Save a known-good run, then compare later runs against it to see only what changed:
+
+```bash
+# capture a baseline once:
+sudo ./vps-audit.sh --json > baseline.json
+
+# later, report drift (and fail CI if anything regressed):
+sudo ./vps-audit.sh --json --baseline baseline.json --fail-on-drift
+```
+
+Each check is compared by its stable `id`. The output gains a `drift` object with
+`regressed` / `improved` (each `{id, from, to}`), `new` (ids not in the baseline),
+and `removed` (ids gone since). The baseline can be a prior `--json` or `--jsonl`
+file. Drift is also shown in the text and Markdown reports.
 
 ### Policy files
 
@@ -308,8 +327,12 @@ The repository is laid out as:
 ├── examples/                     # systemd service+timer and cron examples
 ├── tests/bats/                   # Bats test suite
 ├── docs/                         # screenshot, sample report, JSON schema, deployment
-└── .github/workflows/            # lint.yml (CI) + release.yml (signed releases)
+└── .github/workflows/            # lint.yml, container-tests.yml, release.yml
 ```
+
+CI runs ShellCheck + shfmt + Bats + actionlint (`lint.yml`) and executes the full
+audit inside real **Ubuntu / Debian / Rocky Linux** containers (`container-tests.yml`)
+to catch distro-specific regressions.
 
 To run the checks locally:
 

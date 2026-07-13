@@ -79,6 +79,23 @@ sudo scripts/vps-audit.sh --html     > report.html   # self-contained, inline CS
 Both include a summary line and a table with status, severity, check, finding,
 CIS reference, and remediation.
 
+## Drift (`--baseline FILE`)
+
+Comparing against a prior run adds a `drift` object (and a section to the text /
+Markdown reports):
+
+```json
+"drift": {
+  "baseline": "baseline.json",
+  "regressed": [ { "id": "ssh-root-login", "from": "PASS", "to": "FAIL" } ],
+  "improved":  [ { "id": "disk-usage", "from": "WARN", "to": "PASS" } ],
+  "new":       [ "some-new-check" ],
+  "removed":   [ { "id": "retired-check", "from": "PASS" } ]
+}
+```
+
+Add `--fail-on-drift` to make any regression a non-zero exit.
+
 Validate locally:
 
 ```bash

@@ -128,3 +128,52 @@ setup() {
     [[ "$output" == *"open &lt;policy&gt; &amp; &quot;x&quot;"* ]]
     [[ "$output" != *"http://"* ]]
 }
+
+# --- baseline / drift ----------------------------------------------------
+
+@test "status_rank orders findings" {
+    [ "$(status_rank PASS)" = 0 ]
+    [ "$(status_rank NA)" = 0 ]
+    [ "$(status_rank WARN)" = 1 ]
+    [ "$(status_rank FAIL)" = 2 ]
+}
+
+@test "baseline_status / baseline_ids parse a prior JSON" {
+    local bf
+    bf="$(mktemp)"
+    printf '%s\n' \
+        '    {"id":"ssh-root-login","test":"SSH Root Login","status":"PASS","severity":"high"},' \
+        '    {"id":"firewall","test":"Firewall Status (UFW)","status":"FAIL","severity":"high"}' >"$bf"
+    [ "$(baseline_status "$bf" ssh-root-login)" = PASS ]
+    [ "$(baseline_status "$bf" firewall)" = FAIL ]
+    [ -z "$(baseline_status "$bf" absent)" ]
+    [ "$(baseline_ids "$bf" | tr '\n' ' ')" = "firewall ssh-root-login " ]
+    rm -f "$bf"
+}
+
+@test "compute_drift classifies regressed/improved/new/removed" {
+    local bf
+    bf="$(mktemp)"
+    printf '%s\n' \
+        '    {"id":"ssh-root-login","test":"SSH Root Login","status":"PASS"}' \
+        '    {"id":"disk-usage","test":"Disk Usage","status":"WARN"}' \
+        '    {"id":"old-check","test":"Old Check","status":"PASS"}' >"$bf"
+    R_ID=(ssh-root-login disk-usage new-check)
+    R_STATUS=(FAIL PASS PASS)
+    BASELINE_FILE="$bf"
+    compute_drift
+    rm -f "$bf"
+    [ "${DRIFT_REG[*]}" = "ssh-root-login|PASS|FAIL" ]
+    [ "${DRIFT_IMP[*]}" = "disk-usage|WARN|PASS" ]
+    [ "${DRIFT_NEW[*]}" = "new-check" ]
+    [ "${DRIFT_REM[*]}" = "old-check|PASS" ]
+}
+
+@test "compute_exit_code: --fail-on-drift gates on a regression" {
+    STRICT=false IGNORE_IDS="" FAILON_IDS="" FAIL_ON_DRIFT=true
+    R_ID=(a) R_STATUS=(PASS) R_IGN=(false)
+    DRIFT_REG=("a|PASS|FAIL") DRIFT_IMP=() DRIFT_NEW=() DRIFT_REM=()
+    [ "$(compute_exit_code)" = 1 ]
+    DRIFT_REG=()
+    [ "$(compute_exit_code)" = 0 ]
+}

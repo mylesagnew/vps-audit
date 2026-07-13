@@ -5,6 +5,26 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.0] - 2026-07-13
+
+Drift detection and multi-distro CI. Additive.
+
+### Added
+- **Baseline drift (`--baseline FILE`)**: compare a run against a prior
+  `--json`/`--jsonl` result by check `id`. Output gains a `drift` object —
+  `regressed`/`improved` (`{id, from, to}`), `new`, `removed` — surfaced in JSON,
+  text, and Markdown reports. `--fail-on-drift` makes any regression a non-zero
+  exit. Baseline parsing is dependency-free (no jq); pure functions
+  (`status_rank`, `baseline_status`, `baseline_ids`, `compute_drift`) with unit
+  tests.
+- **Container test matrix** (`.github/workflows/container-tests.yml`): runs the
+  full audit inside real **Ubuntu 24.04 / Debian 12 / Rocky Linux 9** containers
+  across all output modes plus a self-compare baseline, catching distro-specific
+  regressions (e.g. dpkg-less hosts → `NA`, differing `ss`/`free`).
+
+### Changed
+- Schema adds an optional top-level `drift` object (present only with `--baseline`).
+
 ## [3.4.0] - 2026-07-13
 
 Reporting and compliance evidence. Additive.
@@ -201,6 +221,7 @@ CI/CD gate. **Breaking:** the script now exits non-zero when checks fail.
 - Corrected repository attribution (fork of `vernu/vps-audit`, maintained by
   `mylesagnew`).
 
+[3.5.0]: https://github.com/mylesagnew/vps-audit/releases/tag/v3.5.0
 [3.4.0]: https://github.com/mylesagnew/vps-audit/releases/tag/v3.4.0
 [3.3.0]: https://github.com/mylesagnew/vps-audit/releases/tag/v3.3.0
 [3.2.0]: https://github.com/mylesagnew/vps-audit/releases/tag/v3.2.0
