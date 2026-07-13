@@ -5,6 +5,29 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.0] - 2026-07-13
+
+SIEM-friendly output formats and policy exceptions. Additive.
+
+### Added
+- **JSONL output (`--jsonl`)**: one self-contained JSON object per result line
+  (hostname/timestamp inlined) for SIEM/log ingestion.
+- **SARIF output (`--sarif`)**: SARIF 2.1.0 for the GitHub code-scanning /
+  Security tab. `FAIL`→error, `WARN`→warning, `PASS`→note, `NA`→none; `--ignore`d
+  checks carry a `suppressions` entry.
+- **Policy exceptions**: `--ignore ID[,ID]` excludes checks from the exit code
+  (still reported, marked `"ignored": true`); `--fail-on ID[,ID]` forces a
+  non-zero exit if the named ids are `FAIL`/`WARN`. Both repeat.
+- New `ignored` boolean on every JSON result (schema updated).
+
+### Changed
+- Results are stored in parallel arrays and rendered by dedicated `emit_json` /
+  `emit_jsonl` / `emit_sarif` functions from one source of truth.
+- The port classifier and SUID package-ownership check are extracted into pure
+  `ports_summary` / `classify_listen_addr` / `count_unowned` functions, now
+  covered by isolated unit tests (`tests/bats/parsers.bats`) including IPv6
+  brackets, `*:port`, and dual-stack edge cases.
+
 ## [3.2.0] - 2026-07-13
 
 Enterprise/operational output and configurability. All additive.
@@ -158,6 +181,7 @@ CI/CD gate. **Breaking:** the script now exits non-zero when checks fail.
 - Corrected repository attribution (fork of `vernu/vps-audit`, maintained by
   `mylesagnew`).
 
+[3.3.0]: https://github.com/mylesagnew/vps-audit/releases/tag/v3.3.0
 [3.2.0]: https://github.com/mylesagnew/vps-audit/releases/tag/v3.2.0
 [3.1.0]: https://github.com/mylesagnew/vps-audit/releases/tag/v3.1.0
 [3.0.0]: https://github.com/mylesagnew/vps-audit/releases/tag/v3.0.0

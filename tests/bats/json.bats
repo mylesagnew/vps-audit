@@ -26,11 +26,52 @@ assert set(d["summary"]) == {"pass", "warn", "fail", "not_applicable"}, d["summa
 assert isinstance(d["results"], list) and d["results"], "results empty"
 sev = {"critical", "high", "medium", "low", "info"}
 for r in d["results"]:
-    assert set(r) == {"id", "test", "status", "severity", "message", "remediation"}, r
+    assert set(r) == {"id", "test", "status", "severity", "message", "remediation", "ignored"}, r
     assert r["status"] in ("PASS", "WARN", "FAIL", "NA"), r
     assert r["severity"] in sev, r
+    assert isinstance(r["ignored"], bool), r
     assert re.fullmatch(r"[a-z0-9-]+", r["id"]), f"bad id: {r['id']!r}"
 PY
+}
+
+@test "--jsonl emits one valid JSON object per line" {
+    run bash "$SCRIPT" --jsonl --no-public-ip
+    [ "$status" -le 1 ]
+    python3 - <<PY
+import json
+lines = [l for l in """$output""".splitlines() if l.strip()]
+assert lines, "no jsonl output"
+for l in lines:
+    o = json.loads(l)
+    assert "hostname" in o and "id" in o and "status" in o, o
+PY
+}
+
+@test "--sarif emits valid SARIF 2.1.0" {
+    run bash "$SCRIPT" --sarif --no-public-ip
+    [ "$status" -le 1 ]
+    python3 - <<PY
+import json
+d = json.loads(r'''$output''')
+assert d["version"] == "2.1.0", d.get("version")
+run = d["runs"][0]
+assert run["tool"]["driver"]["name"] == "vps-audit"
+assert run["tool"]["driver"]["rules"], "no rules"
+for res in run["results"]:
+    assert res["level"] in ("error", "warning", "note", "none"), res
+    assert "ruleId" in res and "message" in res, res
+PY
+}
+
+@test "--ignore removes a check from the exit gate" {
+    # ssh-config or firewall may FAIL in CI; ignore every id that can fail so the
+    # gate is satisfied regardless of host state, proving --ignore is honoured.
+    run bash "$SCRIPT" --json --no-public-ip
+    [ "$status" -le 1 ]
+    ids="$(python3 -c 'import json,sys; print(" ".join("--ignore "+r["id"] for r in json.loads(sys.argv[1])["results"]))' "$output")"
+    # shellcheck disable=SC2086
+    run bash "$SCRIPT" --json --no-public-ip $ids
+    [ "$status" -eq 0 ]
 }
 
 @test "--json check ids are stable and unique" {

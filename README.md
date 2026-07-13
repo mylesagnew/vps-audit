@@ -147,7 +147,11 @@ sudo ./vps-audit.sh -o /var/log/vps-audit.txt
 | Option | Description |
 |--------|-------------|
 | `--json` | Emit machine-readable JSON to stdout (suppresses the coloured UI). Validates against [`docs/vps-audit.schema.json`](docs/vps-audit.schema.json). |
+| `--jsonl` | Emit one self-contained JSON object per result line (SIEM/log pipelines). |
+| `--sarif` | Emit SARIF 2.1.0 for the GitHub code-scanning / Security tab. |
 | `--strict` | Exit non-zero on `WARN` as well as `FAIL`. |
+| `--ignore ID[,ID]` | Exclude these check ids from the exit code (repeatable). Results still appear, marked `ignored`. |
+| `--fail-on ID[,ID]` | Force a non-zero exit if these ids are `FAIL` or `WARN`, even without `--strict` (repeatable). |
 | `--public-ip` | Enable the external public-IP lookup (`api.ipify.org`). Off by default. |
 | `--no-public-ip` | Explicitly disable the public-IP lookup (the default; kept for backward compatibility). |
 | `--policy FILE` | Load threshold overrides from `FILE` (see [Policy files](#policy-files)). |
@@ -170,13 +174,31 @@ Example pipeline step that fails the build on any `FAIL` or `WARN`:
 sudo ./vps-audit.sh --json --strict > audit.json
 ```
 
-### JSON output
+### Output formats
 
-`--json` emits a document validated by [`docs/vps-audit.schema.json`](docs/vps-audit.schema.json).
+| Flag | Format | Use |
+|------|--------|-----|
+| `--json` | Single JSON document (validated by [the schema](docs/vps-audit.schema.json)) | Automation, dashboards |
+| `--jsonl` | One JSON object per line, hostname/timestamp inlined | SIEM / log ingestion |
+| `--sarif` | SARIF 2.1.0 | GitHub code-scanning / Security tab |
+
 Each result carries a stable `id`, a `severity` (`critical`/`high`/`medium`/`low`/`info`),
-a `remediation` string, and a `status` of `PASS`/`WARN`/`FAIL`/`NA`. The top level
-includes `tool` (name/version/commit) for provenance and a `summary` with
-`not_applicable` counts. See [`docs/sample-report.md`](docs/sample-report.md).
+a `remediation` string, an `ignored` flag, and a `status` of `PASS`/`WARN`/`FAIL`/`NA`.
+The JSON top level includes `tool` (name/version/commit) for provenance and a
+`summary` with `not_applicable` counts. See [`docs/sample-report.md`](docs/sample-report.md).
+
+### Policy exceptions
+
+Gate or suppress specific checks by their stable `id`:
+
+```bash
+# Don't let the SSH port warning fail the pipeline, but hard-fail on an open firewall:
+sudo ./vps-audit.sh --json --strict --ignore ssh-port --fail-on firewall
+```
+
+`--ignore` keeps the check in the output (marked `"ignored": true`) but removes it
+from the exit code; `--fail-on` forces a non-zero exit if the named id is `FAIL`
+or `WARN`. Both accept comma-separated lists and repeat.
 
 ### Policy files
 

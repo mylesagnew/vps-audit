@@ -20,10 +20,12 @@
 #      the script is sourceable (guarded main) so host state can be mocked
 #  #14 Per-check severity + remediation, not_applicable status, tool version/
 #      commit in JSON; thresholds configurable via a --policy file
+#  #15 JSONL and SARIF output modes; --ignore/--fail-on policy exceptions;
+#      port + SUID parsers extracted into unit-testable functions
 #
 
 # Tool identity (COMMIT is stamped in released artifacts by the release workflow)
-VPS_AUDIT_VERSION="3.2.0"
+VPS_AUDIT_VERSION="3.3.0"
 VPS_AUDIT_COMMIT="unknown"
 
 # ===========================================================================
@@ -265,24 +267,27 @@ print_info() {
 #   ID is a stable, machine-readable identifier (kebab-case) that does not change
 #   when the human NAME or MESSAGE wording changes. STATUS is PASS|WARN|FAIL|NA
 #   (NA = not applicable to this host; never affects the exit code). Severity and
-#   remediation are looked up from meta_for(ID).
+#   remediation are looked up from meta_for(ID). Results are stored in parallel
+#   arrays so JSON / JSONL / SARIF all emit from one source.
 check_security() {
     local id="$1" test_name="$2" status="$3" message="$4" meta severity remediation
+    local ignored=false suffix=""
     meta=$(meta_for "$id")
     severity=${meta%%|*}
     remediation=${meta#*|}
+    case " $IGNORE_IDS " in *" $id "*) ignored=true suffix=" ${GRAY}(ignored)${NC}" ;; esac
     case $status in
         PASS)
             PASS_COUNT=$((PASS_COUNT + 1))
-            say "${GREEN}[PASS]${NC} $test_name ${GRAY}- $message${NC}"
+            say "${GREEN}[PASS]${NC} $test_name ${GRAY}- $message${NC}$suffix"
             ;;
         WARN)
             WARN_COUNT=$((WARN_COUNT + 1))
-            say "${YELLOW}[WARN]${NC} $test_name ${GRAY}- $message${NC}"
+            say "${YELLOW}[WARN]${NC} $test_name ${GRAY}- $message${NC}$suffix"
             ;;
         FAIL)
             FAIL_COUNT=$((FAIL_COUNT + 1))
-            say "${RED}[FAIL]${NC} $test_name ${GRAY}- $message${NC}"
+            say "${RED}[FAIL]${NC} $test_name ${GRAY}- $message${NC}$suffix"
             ;;
         NA)
             NA_COUNT=$((NA_COUNT + 1))
@@ -290,10 +295,16 @@ check_security() {
             ;;
     esac
     {
-        echo "[$status] $test_name - $message"
+        $ignored && echo "[$status] $test_name - $message (ignored)" || echo "[$status] $test_name - $message"
         echo ""
     } >&3
-    JSON_ITEMS+=("{\"id\":\"$(json_escape "$id")\",\"test\":\"$(json_escape "$test_name")\",\"status\":\"$status\",\"severity\":\"$(json_escape "$severity")\",\"message\":\"$(json_escape "$message")\",\"remediation\":\"$(json_escape "$remediation")\"}")
+    R_ID+=("$id")
+    R_NAME+=("$test_name")
+    R_STATUS+=("$status")
+    R_SEV+=("$severity")
+    R_MSG+=("$message")
+    R_REM+=("$remediation")
+    R_IGN+=("$ignored")
 }
 
 # report STATUS_MESSAGE ID NAME
@@ -301,6 +312,168 @@ check_security() {
 report() {
     local res="$1" id="$2" name="$3"
     check_security "$id" "$name" "${res%%|*}" "${res#*|}"
+}
+
+# in_list ID SPACE_DELIMITED_LIST -> true/false membership
+in_list() {
+    case " $2 " in *" $1 "*) return 0 ;; *) return 1 ;; esac
+}
+
+# compute_exit_code -> 0/1, honouring --strict, --ignore and --fail-on.
+compute_exit_code() {
+    local i id st ec=0
+    for i in "${!R_ID[@]}"; do
+        id=${R_ID[$i]}
+        st=${R_STATUS[$i]}
+        [ "${R_IGN[$i]}" = true ] && continue # ignored: never gates
+        [ "$st" = FAIL ] && ec=1
+        if $STRICT && [ "$st" = WARN ]; then ec=1; fi
+        if in_list "$id" "$FAILON_IDS"; then
+            case "$st" in FAIL | WARN) ec=1 ;; esac
+        fi
+    done
+    echo "$ec"
+}
+
+# --- pure result serialisers (operate on the R_* arrays) ------------------
+
+result_json_object() {
+    local i="$1"
+    printf '{"id":"%s","test":"%s","status":"%s","severity":"%s","message":"%s","remediation":"%s","ignored":%s}' \
+        "$(json_escape "${R_ID[$i]}")" "$(json_escape "${R_NAME[$i]}")" "${R_STATUS[$i]}" \
+        "$(json_escape "${R_SEV[$i]}")" "$(json_escape "${R_MSG[$i]}")" "$(json_escape "${R_REM[$i]}")" \
+        "${R_IGN[$i]}"
+}
+
+emit_json() {
+    local exit_code="$1" i sep n=${#R_ID[@]}
+    printf '{\n'
+    printf '  "tool": { "name": "vps-audit", "version": "%s", "commit": "%s" },\n' \
+        "$(json_escape "$VPS_AUDIT_VERSION")" "$(json_escape "$VPS_AUDIT_COMMIT")"
+    printf '  "timestamp": "%s",\n' "$TIMESTAMP"
+    printf '  "hostname": "%s",\n' "$(json_escape "$(hostname)")"
+    printf '  "summary": { "pass": %d, "warn": %d, "fail": %d, "not_applicable": %d },\n' \
+        "$PASS_COUNT" "$WARN_COUNT" "$FAIL_COUNT" "$NA_COUNT"
+    printf '  "exit_code": %d,\n' "$exit_code"
+    printf '  "results": [\n'
+    for i in "${!R_ID[@]}"; do
+        sep=","
+        [ "$i" -eq "$((n - 1))" ] && sep=""
+        printf '    %s%s\n' "$(result_json_object "$i")" "$sep"
+    done
+    printf '  ]\n}\n'
+}
+
+# JSONL: one self-contained JSON object per line (hostname/timestamp inlined).
+emit_jsonl() {
+    local i host obj
+    host=$(json_escape "$(hostname)")
+    for i in "${!R_ID[@]}"; do
+        obj=$(result_json_object "$i")
+        printf '{"hostname":"%s","timestamp":"%s",%s\n' "$host" "$TIMESTAMP" "${obj#\{}"
+    done
+}
+
+# SARIF helpers (pure).
+sarif_level() {
+    case "$1" in
+        FAIL) echo error ;;
+        WARN) echo warning ;;
+        PASS) echo note ;;
+        *) echo none ;; # NA
+    esac
+}
+sarif_security_severity() {
+    case "$1" in
+        critical) echo 9.5 ;;
+        high) echo 8.0 ;;
+        medium) echo 5.0 ;;
+        low) echo 3.0 ;;
+        *) echo 1.0 ;; # info
+    esac
+}
+
+# SARIF 2.1.0 for GitHub code-scanning ingestion.
+emit_sarif() {
+    local i sep n=${#R_ID[@]}
+    printf '{\n'
+    # shellcheck disable=SC2016  # $schema is a literal SARIF key, not a variable
+    printf '  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",\n'
+    printf '  "version": "2.1.0",\n'
+    printf '  "runs": [\n    {\n'
+    printf '      "tool": { "driver": {\n'
+    printf '        "name": "vps-audit",\n'
+    printf '        "version": "%s",\n' "$(json_escape "$VPS_AUDIT_VERSION")"
+    printf '        "informationUri": "https://github.com/mylesagnew/vps-audit",\n'
+    printf '        "rules": [\n'
+    for i in "${!R_ID[@]}"; do
+        sep=","
+        [ "$i" -eq "$((n - 1))" ] && sep=""
+        printf '          {"id":"%s","name":"%s","shortDescription":{"text":"%s"},"helpUri":"https://github.com/mylesagnew/vps-audit","properties":{"severity":"%s","security-severity":"%s"}}%s\n' \
+            "$(json_escape "${R_ID[$i]}")" "$(json_escape "${R_NAME[$i]}")" "$(json_escape "${R_REM[$i]}")" \
+            "$(json_escape "${R_SEV[$i]}")" "$(sarif_security_severity "${R_SEV[$i]}")" "$sep"
+    done
+    printf '        ]\n      } },\n'
+    printf '      "results": [\n'
+    for i in "${!R_ID[@]}"; do
+        sep=","
+        [ "$i" -eq "$((n - 1))" ] && sep=""
+        local supp=""
+        [ "${R_IGN[$i]}" = true ] && supp=',"suppressions":[{"kind":"external"}]'
+        printf '        {"ruleId":"%s","level":"%s","message":{"text":"%s"}%s}%s\n' \
+            "$(json_escape "${R_ID[$i]}")" "$(sarif_level "${R_STATUS[$i]}")" \
+            "$(json_escape "${R_MSG[$i]}")" "$supp" "$sep"
+    done
+    printf '      ]\n    }\n  ]\n}\n'
+}
+
+# --- extracted, unit-testable host-data parsers ---------------------------
+
+# classify_listen_addr ADDR -> "loopback" | "public"  (IPv6 brackets stripped)
+classify_listen_addr() {
+    local addr="$1"
+    addr=${addr#[}
+    addr=${addr%]}
+    case "$addr" in
+        127.0.0.1 | ::1 | localhost) echo loopback ;;
+        *) echo public ;;
+    esac
+}
+
+# ports_summary: read "addr:port" lines on stdin, echo "TOTAL_N|PUB_N|TOTAL_CSV|PUB_CSV".
+ports_summary() {
+    local entry port addr all=() pub=() tc="" pc="" tn=0 pn=0
+    while IFS= read -r entry; do
+        [ -z "$entry" ] && continue
+        port=${entry##*:}
+        addr=${entry%:*}
+        [[ "$port" =~ ^[0-9]+$ ]] || continue
+        all+=("$port")
+        [ "$(classify_listen_addr "$addr")" = public ] && pub+=("$port")
+    done
+    if [ ${#all[@]} -gt 0 ]; then
+        tc=$(printf '%s\n' "${all[@]}" | sort -un | tr '\n' ',' | sed 's/,$//')
+        tn=$(printf '%s\n' "${all[@]}" | sort -un | grep -c .)
+    fi
+    if [ ${#pub[@]} -gt 0 ]; then
+        pc=$(printf '%s\n' "${pub[@]}" | sort -un | tr '\n' ',' | sed 's/,$//')
+        pn=$(printf '%s\n' "${pub[@]}" | sort -un | grep -c .)
+    fi
+    printf '%s|%s|%s|%s\n' "$tn" "$pn" "$tc" "$pc"
+}
+
+# count_unowned VERIFIER...: read a newline file list on stdin; echo
+# "COUNT|space-separated-list" of files for which VERIFIER exits non-zero.
+count_unowned() {
+    local n=0 list="" f
+    while IFS= read -r f; do
+        [ -z "$f" ] && continue
+        if ! "$@" "$f" >/dev/null 2>&1; then
+            n=$((n + 1))
+            list="$list $f"
+        fi
+    done
+    printf '%s|%s\n' "$n" "$list"
 }
 
 usage() {
@@ -311,7 +484,11 @@ Usage: vps-audit.sh [options]
 
 Options:
   --json            Emit machine-readable JSON to stdout (suppresses colour UI)
+  --jsonl           Emit one JSON object per result line (SIEM-friendly)
+  --sarif           Emit SARIF 2.1.0 (GitHub code-scanning)
   --strict          Exit non-zero on WARN as well as FAIL (default: FAIL only)
+  --ignore ID[,ID]  Exclude these check ids from the exit code (repeatable)
+  --fail-on ID[,ID] Force non-zero exit if these ids FAIL or WARN (repeatable)
   --public-ip       Enable the external public-IP lookup (api.ipify.org).
                     Off by default: no external calls are made unless requested.
   --no-public-ip    Explicitly disable the public-IP lookup (default; kept for
@@ -344,8 +521,11 @@ main() {
     export PATH
     IFS=$' \t\n'
 
+    OUTPUT_MODE=text # text | json | jsonl | sarif
     JSON_OUTPUT=false
     STRICT=false
+    IGNORE_IDS="" # space-delimited check ids excluded from the exit code
+    FAILON_IDS="" # space-delimited check ids that hard-gate the exit code
     # Off by default (no external calls) for compliance-sensitive environments;
     # enable with --public-ip. --no-public-ip is kept for backward compatibility.
     PUBLIC_IP_LOOKUP=false
@@ -353,7 +533,7 @@ main() {
     WARN_COUNT=0
     FAIL_COUNT=0
     NA_COUNT=0
-    JSON_ITEMS=()
+    R_ID=() R_NAME=() R_STATUS=() R_SEV=() R_MSG=() R_REM=() R_IGN=()
     TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
     REPORT_FILE="vps-audit-report-${TIMESTAMP}.txt"
 
@@ -367,10 +547,28 @@ main() {
 
     while [ $# -gt 0 ]; do
         case "$1" in
-            --json) JSON_OUTPUT=true ;;
+            --json) OUTPUT_MODE=json ;;
+            --jsonl) OUTPUT_MODE=jsonl ;;
+            --sarif) OUTPUT_MODE=sarif ;;
             --strict) STRICT=true ;;
             --public-ip) PUBLIC_IP_LOOKUP=true ;;
             --no-public-ip) PUBLIC_IP_LOOKUP=false ;; # kept for backward compat (now the default)
+            --ignore)
+                shift
+                [ $# -gt 0 ] || {
+                    echo "error: --ignore needs an argument" >&2
+                    exit 2
+                }
+                IGNORE_IDS="$IGNORE_IDS ${1//,/ }"
+                ;;
+            --fail-on)
+                shift
+                [ $# -gt 0 ] || {
+                    echo "error: --fail-on needs an argument" >&2
+                    exit 2
+                }
+                FAILON_IDS="$FAILON_IDS ${1//,/ }"
+                ;;
             --policy)
                 shift
                 [ $# -gt 0 ] || {
@@ -399,6 +597,9 @@ main() {
         esac
         shift
     done
+
+    # Machine-output modes suppress the coloured console UI.
+    [ "$OUTPUT_MODE" = text ] || JSON_OUTPUT=true
 
     # Colours (disabled when not a TTY or in JSON mode)
     if [ -t 1 ] && ! $JSON_OUTPUT; then
@@ -587,26 +788,8 @@ main() {
     fi
 
     if [ -n "$LISTEN_RAW" ]; then
-        ALL_PORTS=()
-        PUBLIC_PORTS=()
-        while IFS= read -r entry; do
-            [ -z "$entry" ] && continue
-            port=${entry##*:}
-            addr=${entry%:*}
-            addr=${addr#[}
-            addr=${addr%]} # strip IPv6 brackets
-            [[ "$port" =~ ^[0-9]+$ ]] || continue
-            ALL_PORTS+=("$port")
-            case "$addr" in
-                127.0.0.1 | ::1 | localhost) ;; # loopback = not exposed
-                *) PUBLIC_PORTS+=("$port") ;;
-            esac
-        done <<<"$LISTEN_RAW"
-
-        TOTAL_UNIQ=$(printf '%s\n' "${ALL_PORTS[@]}" | sort -un | tr '\n' ',' | sed 's/,$//')
-        PUB_UNIQ=$(printf '%s\n' "${PUBLIC_PORTS[@]}" | sort -un | tr '\n' ',' | sed 's/,$//')
-        TOTAL_N=$(printf '%s\n' "${ALL_PORTS[@]}" | sort -un | grep -c .)
-        PUB_N=$(printf '%s\n' "${PUBLIC_PORTS[@]}" | sort -un | grep -c .)
+        IFS='|' read -r TOTAL_N PUB_N TOTAL_UNIQ PUB_UNIQ \
+            < <(printf '%s\n' "$LISTEN_RAW" | ports_summary)
 
         case "$(status_from_thresholds "$PUB_N" "$PUBLIC_PORTS_WARN" "$PUBLIC_PORTS_FAIL")" in
             PASS) check_security "port-security" "Port Security" "PASS" "$PUB_N internet-facing ports [$PUB_UNIQ] (total listening: $TOTAL_N [$TOTAL_UNIQ])" ;;
@@ -709,15 +892,10 @@ main() {
     if [ -z "$SUID_LIST" ]; then
         check_security "suid-files" "SUID Files" "PASS" "No SUID-root files found"
     elif [ -n "$PKG_VERIFY" ]; then
-        UNOWNED=0
-        UNOWNED_LIST=""
-        while IFS= read -r f; do
-            [ -z "$f" ] && continue
-            if ! $PKG_VERIFY "$f" >/dev/null 2>&1; then
-                UNOWNED=$((UNOWNED + 1))
-                UNOWNED_LIST="$UNOWNED_LIST $f"
-            fi
-        done <<<"$SUID_LIST"
+        # shellcheck disable=SC2086  # PKG_VERIFY ("dpkg -S"/"rpm -qf") must word-split into command + arg
+        SUID_RES=$(printf '%s\n' "$SUID_LIST" | count_unowned $PKG_VERIFY)
+        UNOWNED=${SUID_RES%%|*}
+        UNOWNED_LIST=${SUID_RES#*|}
         if [ "$UNOWNED" -eq 0 ]; then
             check_security "suid-files" "SUID Files" "PASS" "$SUID_TOTAL SUID files, all owned by installed packages"
         else
@@ -740,31 +918,18 @@ main() {
     } >&3
     exec 3>&-
 
-    local exit_code=0
-    [ "$FAIL_COUNT" -gt 0 ] && exit_code=1
-    if $STRICT && [ "$WARN_COUNT" -gt 0 ]; then exit_code=1; fi
+    local exit_code
+    exit_code=$(compute_exit_code)
 
-    if $JSON_OUTPUT; then
-        printf '{\n'
-        printf '  "tool": { "name": "vps-audit", "version": "%s", "commit": "%s" },\n' \
-            "$(json_escape "$VPS_AUDIT_VERSION")" "$(json_escape "$VPS_AUDIT_COMMIT")"
-        printf '  "timestamp": "%s",\n' "$TIMESTAMP"
-        printf '  "hostname": "%s",\n' "$(json_escape "$(hostname)")"
-        printf '  "summary": { "pass": %d, "warn": %d, "fail": %d, "not_applicable": %d },\n' \
-            "$PASS_COUNT" "$WARN_COUNT" "$FAIL_COUNT" "$NA_COUNT"
-        printf '  "exit_code": %d,\n' "$exit_code"
-        printf '  "results": [\n'
-        local n=${#JSON_ITEMS[@]} i sep
-        for i in "${!JSON_ITEMS[@]}"; do
-            sep=","
-            [ "$i" -eq "$((n - 1))" ] && sep=""
-            printf '    %s%s\n' "${JSON_ITEMS[$i]}" "$sep"
-        done
-        printf '  ]\n}\n'
-    else
-        say "\n${BOLD}Summary:${NC} ${GREEN}PASS=$PASS_COUNT${NC} ${YELLOW}WARN=$WARN_COUNT${NC} ${RED}FAIL=$FAIL_COUNT${NC} ${GRAY}NA=$NA_COUNT${NC}"
-        say "VPS audit complete. Full report saved to $REPORT_FILE"
-    fi
+    case "$OUTPUT_MODE" in
+        json) emit_json "$exit_code" ;;
+        jsonl) emit_jsonl ;;
+        sarif) emit_sarif ;;
+        *)
+            say "\n${BOLD}Summary:${NC} ${GREEN}PASS=$PASS_COUNT${NC} ${YELLOW}WARN=$WARN_COUNT${NC} ${RED}FAIL=$FAIL_COUNT${NC} ${GRAY}NA=$NA_COUNT${NC}"
+            say "VPS audit complete. Full report saved to $REPORT_FILE"
+            ;;
+    esac
 
     exit "$exit_code"
 }
