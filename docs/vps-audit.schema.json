@@ -5,8 +5,19 @@
   "description": "Schema for the JSON emitted by vps-audit.sh --json",
   "type": "object",
   "additionalProperties": false,
-  "required": ["timestamp", "hostname", "summary", "exit_code", "results"],
+  "required": ["tool", "timestamp", "hostname", "summary", "exit_code", "results"],
   "properties": {
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "commit"],
+      "description": "Provenance of the audit run (name, semantic version, and the git commit that produced it — 'unknown' for non-release builds)",
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "string" },
+        "commit": { "type": "string" }
+      }
+    },
     "timestamp": {
       "type": "string",
       "description": "Report timestamp, format YYYYMMDD_HHMMSS",
@@ -18,24 +29,25 @@
     "summary": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["pass", "warn", "fail"],
+      "required": ["pass", "warn", "fail", "not_applicable"],
       "properties": {
         "pass": { "type": "integer", "minimum": 0 },
         "warn": { "type": "integer", "minimum": 0 },
-        "fail": { "type": "integer", "minimum": 0 }
+        "fail": { "type": "integer", "minimum": 0 },
+        "not_applicable": { "type": "integer", "minimum": 0 }
       }
     },
     "exit_code": {
       "type": "integer",
       "enum": [0, 1],
-      "description": "0 = no FAIL (and no WARN under --strict); 1 = findings"
+      "description": "0 = no FAIL (and no WARN under --strict); 1 = findings. NA never affects the exit code."
     },
     "results": {
       "type": "array",
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "test", "status", "message"],
+        "required": ["id", "test", "status", "severity", "message", "remediation"],
         "properties": {
           "id": {
             "type": "string",
@@ -43,8 +55,21 @@
             "pattern": "^[a-z0-9-]+$"
           },
           "test": { "type": "string", "description": "Human-readable check name" },
-          "status": { "type": "string", "enum": ["PASS", "WARN", "FAIL"] },
-          "message": { "type": "string" }
+          "status": {
+            "type": "string",
+            "enum": ["PASS", "WARN", "FAIL", "NA"],
+            "description": "NA = not applicable to this host (does not affect exit_code)"
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["critical", "high", "medium", "low", "info"],
+            "description": "Inherent risk weight of the control; combine with status"
+          },
+          "message": { "type": "string" },
+          "remediation": {
+            "type": "string",
+            "description": "How to remediate a failing result (may be empty for informational checks)"
+          }
         }
       }
     }

@@ -18,7 +18,13 @@
 #  #12 Stable, machine-readable check IDs in JSON output
 #  #13 Decision logic factored into pure eval_* functions (unit-testable);
 #      the script is sourceable (guarded main) so host state can be mocked
+#  #14 Per-check severity + remediation, not_applicable status, tool version/
+#      commit in JSON; thresholds configurable via a --policy file
 #
+
+# Tool identity (COMMIT is stamped in released artifacts by the release workflow)
+VPS_AUDIT_VERSION="3.2.0"
+VPS_AUDIT_COMMIT="unknown"
 
 # ===========================================================================
 # Pure evaluators: NO host access and NO side effects. Each returns a single
@@ -107,6 +113,73 @@ eval_updates() {
     fi
 }
 
+# meta_for ID -> "severity|remediation"
+#   Static per-check metadata. severity is the control's inherent risk weight
+#   (critical/high/medium/low/info) and applies regardless of PASS/WARN/FAIL;
+#   combine it with the result status. Pure and unit-testable.
+meta_for() {
+    case "$1" in
+        ssh-root-login) echo "high|Set 'PermitRootLogin no' in /etc/ssh/sshd_config and reload sshd." ;;
+        ssh-password-auth) echo "high|Set 'PasswordAuthentication no' and use key-based authentication." ;;
+        ssh-port) echo "low|Optionally move SSH to a non-default privileged port to cut scan noise." ;;
+        ssh-config) echo "info|Run as root with openssh-server installed so the effective config can be read." ;;
+        firewall) echo "high|Enable a host firewall with a default-deny inbound policy (ufw/nftables/firewalld)." ;;
+        unattended-upgrades) echo "medium|Install and enable unattended-upgrades (or your distro's auto-update)." ;;
+        intrusion-prevention) echo "medium|Install and enable Fail2ban or CrowdSec." ;;
+        auth-log) echo "info|Ensure auth logs or the systemd journal are readable (run as root)." ;;
+        failed-logins) echo "medium|Investigate sources; enable Fail2ban/CrowdSec and key-only SSH." ;;
+        system-updates) echo "high|Apply pending security updates: apt-get update && apt-get upgrade." ;;
+        running-services) echo "low|Disable services you do not need to reduce attack surface." ;;
+        port-security) echo "high|Firewall or unbind internet-facing services that need not be public." ;;
+        disk-usage) echo "medium|Free or expand disk before it fills and disrupts services/logging." ;;
+        memory-usage) echo "low|Investigate memory pressure; add RAM or tune workloads." ;;
+        cpu-usage) echo "low|Investigate sustained CPU load; tune or scale the workload." ;;
+        sudo-logging) echo "medium|Ensure sudo logs to syslog (do not set '!syslog')." ;;
+        password-policy) echo "medium|Set pwquality minlen>=12 (and related complexity) in /etc/security/pwquality.conf." ;;
+        suid-files) echo "high|Investigate unowned SUID-root binaries; remove or restrict them." ;;
+        system-restart) echo "low|Reboot during a maintenance window to apply pending kernel/library updates." ;;
+        *) echo "info|" ;;
+    esac
+}
+
+# load_policy FILE
+#   Safely apply threshold overrides from a KEY=INT file (no `source`, so no
+#   arbitrary code execution). Only known threshold keys are accepted.
+load_policy() {
+    local file="$1" line key val
+    if [ ! -r "$file" ]; then
+        echo "error: cannot read policy file: $file" >&2
+        exit 2
+    fi
+    while IFS= read -r line || [ -n "$line" ]; do
+        line=${line%%#*}                                # strip comments
+        line=$(printf '%s' "$line" | tr -d '[:space:]') # drop all whitespace
+        [ -z "$line" ] && continue
+        case "$line" in
+            *=*)
+                key=${line%%=*}
+                val=${line#*=}
+                ;;
+            *) continue ;;
+        esac
+        [[ "$val" =~ ^[0-9]+$ ]] || {
+            echo "error: policy value for $key must be an integer: '$val'" >&2
+            exit 2
+        }
+        case "$key" in
+            FAILED_LOGINS_WARN | FAILED_LOGINS_FAIL | SERVICES_WARN | SERVICES_FAIL | \
+                PUBLIC_PORTS_WARN | PUBLIC_PORTS_FAIL | DISK_WARN | DISK_FAIL | \
+                MEM_WARN | MEM_FAIL | CPU_WARN | CPU_FAIL)
+                printf -v "$key" '%s' "$val"
+                ;;
+            *)
+                echo "error: unknown policy key: $key" >&2
+                exit 2
+                ;;
+        esac
+    done <"$file"
+}
+
 # ===========================================================================
 # Output helpers and result tracking
 # ===========================================================================
@@ -190,9 +263,14 @@ print_info() {
 
 # check_security ID NAME STATUS MESSAGE
 #   ID is a stable, machine-readable identifier (kebab-case) that does not change
-#   when the human NAME or MESSAGE wording changes.
+#   when the human NAME or MESSAGE wording changes. STATUS is PASS|WARN|FAIL|NA
+#   (NA = not applicable to this host; never affects the exit code). Severity and
+#   remediation are looked up from meta_for(ID).
 check_security() {
-    local id="$1" test_name="$2" status="$3" message="$4"
+    local id="$1" test_name="$2" status="$3" message="$4" meta severity remediation
+    meta=$(meta_for "$id")
+    severity=${meta%%|*}
+    remediation=${meta#*|}
     case $status in
         PASS)
             PASS_COUNT=$((PASS_COUNT + 1))
@@ -206,12 +284,16 @@ check_security() {
             FAIL_COUNT=$((FAIL_COUNT + 1))
             say "${RED}[FAIL]${NC} $test_name ${GRAY}- $message${NC}"
             ;;
+        NA)
+            NA_COUNT=$((NA_COUNT + 1))
+            say "${GRAY}[N/A]${NC} $test_name ${GRAY}- $message${NC}"
+            ;;
     esac
     {
         echo "[$status] $test_name - $message"
         echo ""
     } >&3
-    JSON_ITEMS+=("{\"id\":\"$(json_escape "$id")\",\"test\":\"$(json_escape "$test_name")\",\"status\":\"$status\",\"message\":\"$(json_escape "$message")\"}")
+    JSON_ITEMS+=("{\"id\":\"$(json_escape "$id")\",\"test\":\"$(json_escape "$test_name")\",\"status\":\"$status\",\"severity\":\"$(json_escape "$severity")\",\"message\":\"$(json_escape "$message")\",\"remediation\":\"$(json_escape "$remediation")\"}")
 }
 
 # report STATUS_MESSAGE ID NAME
@@ -234,6 +316,8 @@ Options:
                     Off by default: no external calls are made unless requested.
   --no-public-ip    Explicitly disable the public-IP lookup (default; kept for
                     backward compatibility)
+  --policy FILE     Load threshold overrides (KEY=INT) from FILE; see config/
+                    for per-role examples (web/database/bastion)
   -o, --output FILE Write the text report to FILE (default: vps-audit-report-<ts>.txt)
                     Refuses symlinks and will not overwrite an existing file.
   -h, --help        Show this help and exit
@@ -268,9 +352,18 @@ main() {
     PASS_COUNT=0
     WARN_COUNT=0
     FAIL_COUNT=0
+    NA_COUNT=0
     JSON_ITEMS=()
     TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
     REPORT_FILE="vps-audit-report-${TIMESTAMP}.txt"
+
+    # Default thresholds (override with --policy FILE; see config/ examples)
+    FAILED_LOGINS_WARN=10 FAILED_LOGINS_FAIL=50
+    SERVICES_WARN=35 SERVICES_FAIL=60
+    PUBLIC_PORTS_WARN=3 PUBLIC_PORTS_FAIL=5
+    DISK_WARN=50 DISK_FAIL=80
+    MEM_WARN=50 MEM_FAIL=80
+    CPU_WARN=50 CPU_FAIL=80
 
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -278,6 +371,14 @@ main() {
             --strict) STRICT=true ;;
             --public-ip) PUBLIC_IP_LOOKUP=true ;;
             --no-public-ip) PUBLIC_IP_LOOKUP=false ;; # kept for backward compat (now the default)
+            --policy)
+                shift
+                [ $# -gt 0 ] || {
+                    echo "error: --policy needs an argument" >&2
+                    exit 2
+                }
+                load_policy "$1"
+                ;;
             -o | --output)
                 shift
                 [ $# -gt 0 ] || {
@@ -404,7 +505,7 @@ main() {
     elif command -v dpkg >/dev/null 2>&1; then
         check_security "unattended-upgrades" "Unattended Upgrades" "FAIL" "unattended-upgrades not installed - system may miss critical security updates"
     else
-        check_security "unattended-upgrades" "Unattended Upgrades" "WARN" "Non-Debian system - verify automatic updates via your distro's mechanism"
+        check_security "unattended-upgrades" "Unattended Upgrades" "NA" "Non-Debian system - unattended-upgrades check does not apply"
     fi
 
     # Intrusion prevention (Fail2ban / CrowdSec, host or container)
@@ -449,7 +550,7 @@ main() {
     FAILED_LOGINS=$(printf '%s' "$FAILED_LOGINS" | tr -cd '0-9')
     FAILED_LOGINS=${FAILED_LOGINS:-0}
     FAILED_LOGINS=$((10#$FAILED_LOGINS))
-    case "$(status_from_thresholds "$FAILED_LOGINS" 10 50)" in
+    case "$(status_from_thresholds "$FAILED_LOGINS" "$FAILED_LOGINS_WARN" "$FAILED_LOGINS_FAIL")" in
         PASS) check_security "failed-logins" "Failed Logins" "PASS" "$FAILED_LOGINS failed login attempts ($LOGIN_SRC) - within normal range" ;;
         WARN) check_security "failed-logins" "Failed Logins" "WARN" "$FAILED_LOGINS failed login attempts ($LOGIN_SRC) - possible probing" ;;
         FAIL) check_security "failed-logins" "Failed Logins" "FAIL" "$FAILED_LOGINS failed login attempts ($LOGIN_SRC) - possible brute-force attack" ;;
@@ -462,13 +563,13 @@ main() {
         SEC_UPDATES=$(echo "$APT_SIM" | grep -E '^Inst ' | grep -ciE '\-security|Debian-Security')
         report "$(eval_updates "$SEC_UPDATES" "$ALL_UPDATES")" "system-updates" "System Updates"
     else
-        check_security "system-updates" "System Updates" "WARN" "apt not present - check updates via your distro's package manager"
+        check_security "system-updates" "System Updates" "NA" "apt not present - use your distro's package manager to check updates"
     fi
 
     # Running services
     if command -v systemctl >/dev/null 2>&1; then
         SERVICES=$(systemctl list-units --type=service --state=running 2>/dev/null | grep -c "loaded active running")
-        case "$(status_from_thresholds "$SERVICES" 35 60)" in
+        case "$(status_from_thresholds "$SERVICES" "$SERVICES_WARN" "$SERVICES_FAIL")" in
             PASS) check_security "running-services" "Running Services" "PASS" "$SERVICES services running - reasonable for a typical server" ;;
             WARN) check_security "running-services" "Running Services" "WARN" "$SERVICES services running - review whether all are needed" ;;
             FAIL) check_security "running-services" "Running Services" "FAIL" "Too many services running ($SERVICES) - increases attack surface" ;;
@@ -507,7 +608,7 @@ main() {
         TOTAL_N=$(printf '%s\n' "${ALL_PORTS[@]}" | sort -un | grep -c .)
         PUB_N=$(printf '%s\n' "${PUBLIC_PORTS[@]}" | sort -un | grep -c .)
 
-        case "$(status_from_thresholds "$PUB_N" 3 5)" in
+        case "$(status_from_thresholds "$PUB_N" "$PUBLIC_PORTS_WARN" "$PUBLIC_PORTS_FAIL")" in
             PASS) check_security "port-security" "Port Security" "PASS" "$PUB_N internet-facing ports [$PUB_UNIQ] (total listening: $TOTAL_N [$TOTAL_UNIQ])" ;;
             WARN) check_security "port-security" "Port Security" "WARN" "$PUB_N internet-facing ports [$PUB_UNIQ] - review exposure (total: $TOTAL_N)" ;;
             FAIL) check_security "port-security" "Port Security" "FAIL" "$PUB_N internet-facing ports [$PUB_UNIQ] - high exposure, firewall unneeded ones (total: $TOTAL_N)" ;;
@@ -519,7 +620,7 @@ main() {
     DISK_USED=$(df -h / | awk 'NR==2 {print $3}')
     DISK_AVAIL=$(df -h / | awk 'NR==2 {print $4}')
     DISK_USAGE=$(df -h / | awk 'NR==2 {print int($5)}')
-    case "$(status_from_thresholds "$DISK_USAGE" 50 80)" in
+    case "$(status_from_thresholds "$DISK_USAGE" "$DISK_WARN" "$DISK_FAIL")" in
         PASS) check_security "disk-usage" "Disk Usage" "PASS" "Healthy disk space (${DISK_USAGE}% used - ${DISK_USED} of ${DISK_TOTAL}, ${DISK_AVAIL} free)" ;;
         WARN) check_security "disk-usage" "Disk Usage" "WARN" "Moderate disk usage (${DISK_USAGE}% used - ${DISK_USED} of ${DISK_TOTAL}, ${DISK_AVAIL} free)" ;;
         FAIL) check_security "disk-usage" "Disk Usage" "FAIL" "Critical disk usage (${DISK_USAGE}% used - ${DISK_USED} of ${DISK_TOTAL}, ${DISK_AVAIL} free)" ;;
@@ -530,7 +631,7 @@ main() {
     MEM_USED=$(free -h | awk '/^Mem:/ {print $3}')
     MEM_AVAIL=$(free -h | awk '/^Mem:/ {print $7}')
     MEM_USAGE=$(free | awk '/^Mem:/ {printf "%.0f", $3/$2 * 100}')
-    case "$(status_from_thresholds "$MEM_USAGE" 50 80)" in
+    case "$(status_from_thresholds "$MEM_USAGE" "$MEM_WARN" "$MEM_FAIL")" in
         PASS) check_security "memory-usage" "Memory Usage" "PASS" "Healthy memory usage (${MEM_USAGE}% used - ${MEM_USED} of ${MEM_TOTAL}, ${MEM_AVAIL} available)" ;;
         WARN) check_security "memory-usage" "Memory Usage" "WARN" "Moderate memory usage (${MEM_USAGE}% used - ${MEM_USED} of ${MEM_TOTAL}, ${MEM_AVAIL} available)" ;;
         FAIL) check_security "memory-usage" "Memory Usage" "FAIL" "Critical memory usage (${MEM_USAGE}% used - ${MEM_USED} of ${MEM_TOTAL}, ${MEM_AVAIL} available)" ;;
@@ -560,7 +661,7 @@ main() {
         CPU_USAGE=$(top -bn1 | awk '/Cpu\(s\)/{print int($2); exit}')
         CPU_IDLE=$((100 - CPU_USAGE))
     fi
-    case "$(status_from_thresholds "$CPU_USAGE" 50 80)" in
+    case "$(status_from_thresholds "$CPU_USAGE" "$CPU_WARN" "$CPU_FAIL")" in
         PASS) check_security "cpu-usage" "CPU Usage" "PASS" "Healthy CPU usage (${CPU_USAGE}% - Idle: ${CPU_IDLE}%, Load: ${CPU_LOAD}, Cores: ${CPU_CORES})" ;;
         WARN) check_security "cpu-usage" "CPU Usage" "WARN" "Moderate CPU usage (${CPU_USAGE}% - Idle: ${CPU_IDLE}%, Load: ${CPU_LOAD}, Cores: ${CPU_CORES})" ;;
         FAIL) check_security "cpu-usage" "CPU Usage" "FAIL" "Critical CPU usage (${CPU_USAGE}% - Idle: ${CPU_IDLE}%, Load: ${CPU_LOAD}, Cores: ${CPU_CORES})" ;;
@@ -631,8 +732,9 @@ main() {
     # -----------------------------------------------------------------------
     {
         echo "================================"
-        echo "Summary: PASS=$PASS_COUNT WARN=$WARN_COUNT FAIL=$FAIL_COUNT"
+        echo "Summary: PASS=$PASS_COUNT WARN=$WARN_COUNT FAIL=$FAIL_COUNT NA=$NA_COUNT"
         echo "System: $(hostname) | $(uname -r) | $OS_INFO"
+        echo "vps-audit $VPS_AUDIT_VERSION ($VPS_AUDIT_COMMIT)"
         echo "================================"
         echo "End of VPS Audit Report"
     } >&3
@@ -644,9 +746,12 @@ main() {
 
     if $JSON_OUTPUT; then
         printf '{\n'
+        printf '  "tool": { "name": "vps-audit", "version": "%s", "commit": "%s" },\n' \
+            "$(json_escape "$VPS_AUDIT_VERSION")" "$(json_escape "$VPS_AUDIT_COMMIT")"
         printf '  "timestamp": "%s",\n' "$TIMESTAMP"
         printf '  "hostname": "%s",\n' "$(json_escape "$(hostname)")"
-        printf '  "summary": { "pass": %d, "warn": %d, "fail": %d },\n' "$PASS_COUNT" "$WARN_COUNT" "$FAIL_COUNT"
+        printf '  "summary": { "pass": %d, "warn": %d, "fail": %d, "not_applicable": %d },\n' \
+            "$PASS_COUNT" "$WARN_COUNT" "$FAIL_COUNT" "$NA_COUNT"
         printf '  "exit_code": %d,\n' "$exit_code"
         printf '  "results": [\n'
         local n=${#JSON_ITEMS[@]} i sep
@@ -657,7 +762,7 @@ main() {
         done
         printf '  ]\n}\n'
     else
-        say "\n${BOLD}Summary:${NC} ${GREEN}PASS=$PASS_COUNT${NC} ${YELLOW}WARN=$WARN_COUNT${NC} ${RED}FAIL=$FAIL_COUNT${NC}"
+        say "\n${BOLD}Summary:${NC} ${GREEN}PASS=$PASS_COUNT${NC} ${YELLOW}WARN=$WARN_COUNT${NC} ${RED}FAIL=$FAIL_COUNT${NC} ${GRAY}NA=$NA_COUNT${NC}"
         say "VPS audit complete. Full report saved to $REPORT_FILE"
     fi
 

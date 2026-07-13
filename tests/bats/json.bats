@@ -19,13 +19,16 @@ teardown() {
     python3 - "$output" <<'PY'
 import json, re, sys
 d = json.loads(sys.argv[1])
-for k in ("timestamp", "hostname", "summary", "exit_code", "results"):
+for k in ("tool", "timestamp", "hostname", "summary", "exit_code", "results"):
     assert k in d, f"missing key: {k}"
-assert set(d["summary"]) == {"pass", "warn", "fail"}, d["summary"]
+assert set(d["tool"]) == {"name", "version", "commit"}, d["tool"]
+assert set(d["summary"]) == {"pass", "warn", "fail", "not_applicable"}, d["summary"]
 assert isinstance(d["results"], list) and d["results"], "results empty"
+sev = {"critical", "high", "medium", "low", "info"}
 for r in d["results"]:
-    assert set(r) == {"id", "test", "status", "message"}, r
-    assert r["status"] in ("PASS", "WARN", "FAIL"), r
+    assert set(r) == {"id", "test", "status", "severity", "message", "remediation"}, r
+    assert r["status"] in ("PASS", "WARN", "FAIL", "NA"), r
+    assert r["severity"] in sev, r
     assert re.fullmatch(r"[a-z0-9-]+", r["id"]), f"bad id: {r['id']!r}"
 PY
 }

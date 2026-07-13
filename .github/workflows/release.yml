@@ -30,6 +30,9 @@ jobs:
           # Publish the script at the top level of the release for a simple
           # download URL: releases/download/<tag>/vps-audit.sh
           cp scripts/vps-audit.sh dist/vps-audit.sh
+          # Stamp the real commit into the released artifact so `--json` output
+          # (tool.commit) is traceable to the exact source.
+          sed -i "s/^VPS_AUDIT_COMMIT=.*/VPS_AUDIT_COMMIT=\"${GITHUB_SHA}\"/" dist/vps-audit.sh
           cd dist
           sha256sum vps-audit.sh > SHA256SUMS
           cat SHA256SUMS
