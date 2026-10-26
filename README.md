@@ -438,6 +438,10 @@ To run the checks locally:
 Feel free to submit issues and enhancement requests! Please run the checks in
 [Development](#development) before opening a pull request.
 
+## Credits
+
+vps-audit started as [vernu/vps-audit](https://github.com/vernu/vps-audit) by Israel Abebe (now [nuver-labs/vps-audit](https://github.com/nuver-labs/vps-audit)). This fork is maintained by [@mylesagnew](https://github.com/mylesagnew) and adds hardened output handling, JSON and schema output, role profiles, drift detection, attested releases and container CI. To support the original author, see the upstream repository.
+
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
